@@ -56,6 +56,19 @@ Preview the production bundle:
 npm run preview
 ```
 
+Build and run the static container locally:
+
+```bash
+docker build -t wardrobe:local .
+docker run --rm -p 8080:80 wardrobe:local
+```
+
+Then open:
+
+```text
+http://localhost:8080/
+```
+
 ## Local Data
 
 Wardrobe uses browser storage, not a server database:
