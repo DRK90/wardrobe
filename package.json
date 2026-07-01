@@ -1,0 +1,31 @@
+{
+  "name": "wardrobe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first wardrobe inventory and weather-aware outfit planning PWA.",
+  "license": "CC-BY-NC-4.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DRK90/wardrobe.git"
+  },
+  "engines": {
+    "node": ">=26.4.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5175",
+    "start": "npm run dev",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 5175",
+    "verify": "node scripts/verify.mjs && vite build"
+  },
+  "dependencies": {
+    "lucide-react": "^1.22.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.2"
+  }
+}
