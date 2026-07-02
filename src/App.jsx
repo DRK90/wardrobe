@@ -163,6 +163,9 @@ const filterDefaults = {
   material: ""
 };
 
+const emptyAiStatus = { state: "idle", message: "", draft: null };
+const emptyInventoryAiStatus = { itemId: "", state: "idle", message: "", draft: null };
+
 const materialOptions = [
   "Cotton",
   "Linen",
@@ -584,7 +587,8 @@ function App() {
   const [generatedOutfit, setGeneratedOutfit] = useState(null);
   const [outfitOverrides, setOutfitOverrides] = useState({});
   const [form, setForm] = useState(() => freshItemTemplate());
-  const [aiEnrichmentStatus, setAiEnrichmentStatus] = useState({ state: "idle", message: "", draft: null });
+  const [aiEnrichmentStatus, setAiEnrichmentStatus] = useState(emptyAiStatus);
+  const [inventoryAiStatus, setInventoryAiStatus] = useState(emptyInventoryAiStatus);
   const [toast, setToast] = useState("");
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
@@ -833,6 +837,45 @@ function App() {
     }
   }
 
+  async function enrichInventoryItem(itemId) {
+    const item = items.find((candidate) => candidate.id === itemId);
+    if (!item) return;
+
+    if (!item.imageDataUrl) {
+      const message = "Add a photo first";
+      setInventoryAiStatus({ itemId, state: "error", message, draft: null });
+      showToast(message);
+      return;
+    }
+    if (!isAiVisionConfigured(settings.aiVision)) {
+      const message = "Configure AI enrichment";
+      setInventoryAiStatus({ itemId, state: "error", message, draft: null });
+      showToast(message);
+      return;
+    }
+
+    setInventoryAiStatus({ itemId, state: "loading", message: "Reading photo", draft: null });
+    try {
+      const draft = await enrichItemFromImage({ config: settings.aiVision, imageDataUrl: item.imageDataUrl, item });
+      setItems((current) =>
+        current.map((candidate) =>
+          candidate.id === itemId ? normalizeItem(mergeAiDraftIntoItem(candidate, draft, newItemTemplate)) : candidate
+        )
+      );
+      setInventoryAiStatus({
+        itemId,
+        state: "ready",
+        message: draft.confidence ? `${Math.round(draft.confidence * 100)}% confidence` : "Draft applied",
+        draft
+      });
+      showToast("AI draft applied");
+    } catch (error) {
+      const message = error.message || "AI enrichment failed";
+      setInventoryAiStatus({ itemId, state: "error", message, draft: null });
+      showToast(message);
+    }
+  }
+
   async function refreshWeather(kind, zip, options = {}) {
     const normalizedZip = cleanZip(zip);
     if (!validZip(normalizedZip)) {
@@ -916,6 +959,7 @@ function App() {
         removedStarterIds: [...new Set([...(current.removedStarterIds ?? []), id])]
       }));
     }
+    setInventoryAiStatus((current) => (current.itemId === id ? emptyInventoryAiStatus : current));
     setItems((current) => current.filter((candidate) => candidate.id !== id));
     setGeneratedOutfit((current) => {
       if (!current) return current;
@@ -1013,6 +1057,7 @@ function App() {
     const item = normalizeItem(form);
     setItems((current) => [item, ...current]);
     setForm(freshItemTemplate());
+    setAiEnrichmentStatus(emptyAiStatus);
     setView("inventory");
     showToast("Item saved");
   }
@@ -1108,6 +1153,10 @@ function App() {
                 sort={sort}
                 setSort={setSort}
                 onRemove={removeItem}
+                aiVision={settings.aiVision}
+                aiStatus={inventoryAiStatus}
+                onEnrichItem={enrichInventoryItem}
+                onOpenSettings={() => setView("settings")}
               />
             ) : null}
             {view === "planner" ? (
@@ -1140,6 +1189,7 @@ function App() {
                 aiStatus={aiEnrichmentStatus}
                 onEnrich={enrichCaptureForm}
                 onOpenSettings={() => setView("settings")}
+                onResetAiStatus={() => setAiEnrichmentStatus(emptyAiStatus)}
               />
             ) : null}
             {view === "settings" ? (
@@ -1759,7 +1809,62 @@ function DetailField({ label, value }) {
   );
 }
 
-function ItemDetailPanel({ item, onClose }) {
+function AiEnrichmentPanel({ configured, hasImage, status, onEnrich, onOpenSettings, summary, compact = false }) {
+  const loading = status?.state === "loading";
+  const state = status?.state ?? "idle";
+  const message =
+    status?.message ||
+    (!configured ? "Set a provider in Settings." : !hasImage ? "Add a photo first." : "Draft fields stay editable.");
+
+  return (
+    <div className={compact ? "ai-panel compact" : "ai-panel"} {...componentMeta("AiEnrichmentPanel")}>
+      <div className="ai-panel-copy">
+        <div className="ai-panel-title">
+          <Wand2 size={16} aria-hidden="true" />
+          <strong>AI enrichment</strong>
+        </div>
+        <span className={`ai-status state-${state}`} aria-live="polite">{message}</span>
+        {summary ? <small>{summary}</small> : null}
+      </div>
+      <div className="ai-panel-actions">
+        <button
+          className="primary-button"
+          type="button"
+          disabled={!hasImage || !configured || loading}
+          onClick={onEnrich}
+        >
+          <Wand2 size={16} aria-hidden="true" />
+          {loading ? "Reading" : "Enrich with AI"}
+        </button>
+        {!configured ? (
+          <button className="secondary-button" type="button" onClick={onOpenSettings}>
+            <Settings size={16} aria-hidden="true" />
+            Settings
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function AiEvidencePanel({ draft }) {
+  const evidence = draft?.evidence?.filter(Boolean).slice(0, 5) ?? [];
+  if (!evidence.length) return null;
+
+  return (
+    <div className="ai-evidence" {...componentMeta("AiEvidencePanel")}>
+      <strong>AI evidence</strong>
+      <div>
+        {evidence.map((line) => (
+          <StatusChip key={line} tone="info">{line}</StatusChip>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ItemDetailPanel({ item, aiVision, aiStatus, onEnrich, onOpenSettings, onClose }) {
+  const aiConfigured = isAiVisionConfigured(aiVision);
   const details = [
     ["Category", labelFor(item.category)],
     ["Subcategory", item.subcategory],
@@ -1799,6 +1904,16 @@ function ItemDetailPanel({ item, onClose }) {
           Close
         </button>
       </div>
+      <AiEnrichmentPanel
+        compact
+        configured={aiConfigured}
+        hasImage={Boolean(item.imageDataUrl)}
+        status={aiStatus}
+        onEnrich={onEnrich}
+        onOpenSettings={onOpenSettings}
+        summary="Uses this item's photo to fill blank fields."
+      />
+      <AiEvidencePanel draft={aiStatus?.draft} />
       <div className="item-detail-grid">
         {details.map(([label, value]) => (
           <DetailField key={label} label={label} value={value} />
@@ -1832,7 +1947,11 @@ function InventoryView({
   setFilters,
   sort,
   setSort,
-  onRemove
+  onRemove,
+  aiVision,
+  aiStatus,
+  onEnrichItem,
+  onOpenSettings
 }) {
   const [selectedItemId, setSelectedItemId] = useState("");
 
@@ -1953,6 +2072,7 @@ function InventoryView({
             {items.map((item) => {
               const profile = inferWeatherProfile(item);
               const selected = selectedItemId === item.id;
+              const itemAiStatus = aiStatus?.itemId === item.id ? aiStatus : emptyAiStatus;
               return (
                 <Fragment key={item.id}>
                   <tr
@@ -2011,7 +2131,14 @@ function InventoryView({
                   {selected ? (
                     <tr className="item-detail-row">
                       <td colSpan={headers.length + 1}>
-                        <ItemDetailPanel item={item} onClose={() => setSelectedItemId("")} />
+                        <ItemDetailPanel
+                          item={item}
+                          aiVision={aiVision}
+                          aiStatus={itemAiStatus}
+                          onEnrich={() => onEnrichItem(item.id)}
+                          onOpenSettings={onOpenSettings}
+                          onClose={() => setSelectedItemId("")}
+                        />
                       </td>
                     </tr>
                   ) : null}
@@ -2574,9 +2701,8 @@ function SlotPicker({ slot, title, query, setQuery, allItems, candidates, exclud
   );
 }
 
-function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, onOpenSettings }) {
+function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, onOpenSettings, onResetAiStatus }) {
   const aiConfigured = isAiVisionConfigured(aiVision);
-  const aiLoading = aiStatus?.state === "loading";
 
   function setField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -2595,7 +2721,10 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
   function readImage(file) {
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setField("imageDataUrl", String(reader.result));
+    reader.onload = () => {
+      setField("imageDataUrl", String(reader.result));
+      onResetAiStatus?.();
+    };
     reader.readAsDataURL(file);
   }
 
@@ -2615,52 +2744,39 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
             readImage(event.dataTransfer.files?.[0]);
           }}
         >
-          <div>
+          <div className="image-preview">
             {form.imageDataUrl ? <img src={form.imageDataUrl} alt="" /> : <Camera size={30} aria-hidden="true" />}
           </div>
-          <label className="secondary-button">
-            <ImagePlus size={16} aria-hidden="true" />
-            Photo
-            <input type="file" accept="image/*" capture="environment" onChange={(event) => readImage(event.target.files?.[0])} hidden />
-          </label>
-          {form.imageDataUrl ? (
-            <button className="secondary-button" type="button" onClick={() => setField("imageDataUrl", "")}>
-              Remove photo
-            </button>
-          ) : null}
-          <div className="capture-ai">
-            <button
-              className="primary-button"
-              type="button"
-              disabled={!form.imageDataUrl || !aiConfigured || aiLoading}
-              onClick={onEnrich}
-            >
-              <Wand2 size={16} aria-hidden="true" />
-              {aiLoading ? "Reading" : "Enrich with AI"}
-            </button>
-            {!aiConfigured ? (
-              <button className="secondary-button" type="button" onClick={onOpenSettings}>
-                Settings
+          <div className="image-actions">
+            <label className="secondary-button">
+              <ImagePlus size={16} aria-hidden="true" />
+              Photo
+              <input type="file" accept="image/*" capture="environment" onChange={(event) => readImage(event.target.files?.[0])} hidden />
+            </label>
+            {form.imageDataUrl ? (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  setField("imageDataUrl", "");
+                  onResetAiStatus?.();
+                }}
+              >
+                Remove photo
               </button>
             ) : null}
-            {aiStatus?.message ? (
-              <span className={`ai-status state-${aiStatus.state}`}>{aiStatus.message}</span>
-            ) : (
-              <span className="ai-status">Draft fields stay editable</span>
-            )}
           </div>
+          <AiEnrichmentPanel
+            configured={aiConfigured}
+            hasImage={Boolean(form.imageDataUrl)}
+            status={aiStatus}
+            onEnrich={onEnrich}
+            onOpenSettings={onOpenSettings}
+            summary="Uses the selected photo to draft item metadata."
+          />
         </div>
 
-        {aiStatus?.draft?.evidence?.length ? (
-          <div className="ai-evidence" {...componentMeta("CaptureAiEvidence")}>
-            <strong>AI evidence</strong>
-            <div>
-              {aiStatus.draft.evidence.slice(0, 5).map((line) => (
-                <StatusChip key={line} tone="info">{line}</StatusChip>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        <AiEvidencePanel draft={aiStatus?.draft} />
 
         <div className="form-profile" {...componentMeta("CaptureWeatherProfile")}>
           <strong>Weather profile</strong>

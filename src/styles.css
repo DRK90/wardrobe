@@ -1624,14 +1624,14 @@ textarea {
   min-height: 156px;
   padding: var(--space-3);
   display: grid;
-  grid-template-columns: 132px auto auto minmax(240px, 1fr);
-  align-items: center;
+  grid-template-columns: 132px minmax(132px, 168px) minmax(280px, 1fr);
+  align-items: stretch;
   gap: var(--space-3);
 }
 
-.image-dropzone > div {
+.image-preview {
   width: 132px;
-  height: 132px;
+  aspect-ratio: 1;
   border: 1px solid var(--color-line);
   border-radius: var(--radius);
   background: var(--color-bg);
@@ -1647,22 +1647,75 @@ textarea {
   object-fit: cover;
 }
 
-.capture-ai {
+.image-actions {
   min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: var(--space-2);
+}
+
+.image-actions .secondary-button {
+  width: 100%;
+}
+
+.ai-panel {
+  min-width: 0;
+  min-height: 132px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  padding: var(--space-3);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.ai-panel.compact {
+  min-height: 0;
+  background: var(--color-panel);
+}
+
+.ai-panel-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ai-panel-title {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
+  color: var(--color-primary-strong);
+}
+
+.ai-panel-title strong {
+  font-size: 0.86rem;
+}
+
+.ai-panel-copy small {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.ai-panel-actions {
+  display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
   flex-wrap: wrap;
 }
 
 .ai-status {
-  min-height: 24px;
   color: var(--color-muted);
-  display: inline-flex;
-  align-items: center;
   font-size: 0.76rem;
   font-weight: 800;
+  line-height: 1.35;
+}
+
+.ai-status.state-loading {
+  color: var(--color-primary-strong);
 }
 
 .ai-status.state-ready {
@@ -1992,9 +2045,18 @@ body.local-component-labels .app-shell[data-component]::before {
     border-top: 1px solid var(--color-line);
   }
 
-  .image-dropzone > div {
+  .image-preview {
     width: 100%;
     max-width: 220px;
+  }
+
+  .ai-panel,
+  .ai-panel.compact {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-panel-actions {
+    justify-content: start;
   }
 
   .outfit-board {
