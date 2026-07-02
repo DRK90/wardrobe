@@ -60,6 +60,15 @@ import {
   validZip,
   weatherToRequest
 } from "./weather.js";
+import {
+  aiVisionDefaultsForProvider,
+  aiVisionProviderOptions,
+  defaultAiVisionSettings,
+  enrichItemFromImage,
+  isAiVisionConfigured,
+  mergeAiDraftIntoItem,
+  normalizeAiVisionSettings
+} from "./aiVision.js";
 
 const defaultSettings = {
   id: "main",
@@ -68,7 +77,8 @@ const defaultSettings = {
   removedStarterIds: [],
   homeZip: "",
   destinationEnabled: false,
-  destinationZip: ""
+  destinationZip: "",
+  aiVision: defaultAiVisionSettings
 };
 
 const emptyWeatherCache = {
@@ -97,7 +107,8 @@ function normalizeSettings(settings) {
     destinationZip: settings?.destinationZip ?? defaultSettings.destinationZip,
     removedStarterIds: settings?.removedStarterIds,
     weatherProvider: settings?.weatherProvider ?? defaultSettings.weatherProvider,
-    units: settings?.units ?? defaultSettings.units
+    units: settings?.units ?? defaultSettings.units,
+    aiVision: normalizeAiVisionSettings(settings?.aiVision)
   };
   if (!Array.isArray(next.removedStarterIds)) next.removedStarterIds = [];
   next.homeZip = cleanZip(next.homeZip);
@@ -573,6 +584,7 @@ function App() {
   const [generatedOutfit, setGeneratedOutfit] = useState(null);
   const [outfitOverrides, setOutfitOverrides] = useState({});
   const [form, setForm] = useState(() => freshItemTemplate());
+  const [aiEnrichmentStatus, setAiEnrichmentStatus] = useState({ state: "idle", message: "", draft: null });
   const [toast, setToast] = useState("");
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
@@ -647,6 +659,10 @@ function App() {
     if (!loaded) return;
     setEventForecastStatus({ state: "idle", message: "" });
   }, [loaded, request.eventDate, request.eventTime, request.eventLocation]);
+
+  useEffect(() => {
+    setAiEnrichmentStatus({ state: "idle", message: "", draft: null });
+  }, [form.imageDataUrl]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -776,6 +792,45 @@ function App() {
         weatherProvider: patch.homeZip || current.homeZip ? "nws" : current.weatherProvider
       })
     );
+  }
+
+  function updateAiVisionSettings(patch) {
+    setSettings((current) =>
+      normalizeSettings({
+        ...current,
+        aiVision: normalizeAiVisionSettings({
+          ...(current.aiVision ?? defaultAiVisionSettings),
+          ...patch
+        })
+      })
+    );
+  }
+
+  async function enrichCaptureForm() {
+    if (!form.imageDataUrl) {
+      showToast("Add a photo first");
+      return;
+    }
+    if (!isAiVisionConfigured(settings.aiVision)) {
+      showToast("Configure AI enrichment");
+      return;
+    }
+
+    setAiEnrichmentStatus({ state: "loading", message: "Reading photo", draft: null });
+    try {
+      const draft = await enrichItemFromImage({ config: settings.aiVision, imageDataUrl: form.imageDataUrl, item: form });
+      setForm((current) => mergeAiDraftIntoItem(current, draft, newItemTemplate));
+      setAiEnrichmentStatus({
+        state: "ready",
+        message: draft.confidence ? `${Math.round(draft.confidence * 100)}% confidence` : "Draft applied",
+        draft
+      });
+      showToast("AI draft applied");
+    } catch (error) {
+      const message = error.message || "AI enrichment failed";
+      setAiEnrichmentStatus({ state: "error", message, draft: null });
+      showToast(message);
+    }
   }
 
   async function refreshWeather(kind, zip, options = {}) {
@@ -963,12 +1018,14 @@ function App() {
   }
 
   function exportData() {
+    const exportAiVision = normalizeAiVisionSettings(settings.aiVision);
+    delete exportAiVision.apiKey;
     const payload = {
       exportedAt: new Date().toISOString(),
       version: 4,
       items,
       wearLogs,
-      settings: { ...settings, aiApiKey: undefined },
+      settings: { ...settings, aiApiKey: undefined, aiVision: exportAiVision },
       weatherCache
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -1074,7 +1131,17 @@ function App() {
                 onFindEventForecast={() => applyEventForecast(request, "planner")}
               />
             ) : null}
-            {view === "capture" ? <CaptureView form={form} setForm={setForm} onSubmit={saveNewItem} /> : null}
+            {view === "capture" ? (
+              <CaptureView
+                form={form}
+                setForm={setForm}
+                onSubmit={saveNewItem}
+                aiVision={settings.aiVision}
+                aiStatus={aiEnrichmentStatus}
+                onEnrich={enrichCaptureForm}
+                onOpenSettings={() => setView("settings")}
+              />
+            ) : null}
             {view === "settings" ? (
               <SettingsView
                 settings={settings}
@@ -1085,6 +1152,7 @@ function App() {
                 importRef={importRef}
                 onImport={importData}
                 onUpdateWeatherSettings={updateWeatherSettings}
+                onUpdateAiVisionSettings={updateAiVisionSettings}
                 onRemoveStarterWardrobe={removeStarterWardrobe}
                 starterItemCount={items.filter((item) => starterItemIds.has(item.id)).length}
               />
@@ -2506,7 +2574,10 @@ function SlotPicker({ slot, title, query, setQuery, allItems, candidates, exclud
   );
 }
 
-function CaptureView({ form, setForm, onSubmit }) {
+function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, onOpenSettings }) {
+  const aiConfigured = isAiVisionConfigured(aiVision);
+  const aiLoading = aiStatus?.state === "loading";
+
   function setField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -2557,7 +2628,39 @@ function CaptureView({ form, setForm, onSubmit }) {
               Remove photo
             </button>
           ) : null}
+          <div className="capture-ai">
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!form.imageDataUrl || !aiConfigured || aiLoading}
+              onClick={onEnrich}
+            >
+              <Wand2 size={16} aria-hidden="true" />
+              {aiLoading ? "Reading" : "Enrich with AI"}
+            </button>
+            {!aiConfigured ? (
+              <button className="secondary-button" type="button" onClick={onOpenSettings}>
+                Settings
+              </button>
+            ) : null}
+            {aiStatus?.message ? (
+              <span className={`ai-status state-${aiStatus.state}`}>{aiStatus.message}</span>
+            ) : (
+              <span className="ai-status">Draft fields stay editable</span>
+            )}
+          </div>
         </div>
+
+        {aiStatus?.draft?.evidence?.length ? (
+          <div className="ai-evidence" {...componentMeta("CaptureAiEvidence")}>
+            <strong>AI evidence</strong>
+            <div>
+              {aiStatus.draft.evidence.slice(0, 5).map((line) => (
+                <StatusChip key={line} tone="info">{line}</StatusChip>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="form-profile" {...componentMeta("CaptureWeatherProfile")}>
           <strong>Weather profile</strong>
@@ -2722,9 +2825,22 @@ function SettingsView({
   importRef,
   onImport,
   onUpdateWeatherSettings,
+  onUpdateAiVisionSettings,
   onRemoveStarterWardrobe,
   starterItemCount
 }) {
+  const aiVision = normalizeAiVisionSettings(settings.aiVision);
+
+  function updateProvider(provider) {
+    const defaults = aiVisionDefaultsForProvider(provider);
+    onUpdateAiVisionSettings({
+      provider,
+      endpoint: defaults.endpoint,
+      model: defaults.model,
+      apiKey: ""
+    });
+  }
+
   return (
     <section className="settings-grid" {...componentMeta("SettingsView")}>
       <div className="panel">
@@ -2755,6 +2871,59 @@ function SettingsView({
             accept="application/json"
             onChange={(event) => onImport(event.target.files?.[0]).catch((error) => alert(error.message))}
           />
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-header">
+          <div>
+            <h1>AI enrichment</h1>
+            <span className="panel-subtitle">Photo metadata drafts from your selected provider</span>
+          </div>
+        </div>
+        <div className="settings-list ai-settings-list">
+          <Select
+            label="Provider"
+            value={aiVision.provider}
+            onChange={updateProvider}
+            options={aiVisionProviderOptions}
+          />
+          <label>
+            API endpoint
+            <input
+              value={aiVision.endpoint}
+              onChange={(event) => onUpdateAiVisionSettings({ endpoint: event.target.value })}
+              placeholder={aiVision.provider === "wardrobe" ? "http://host:8114" : "Provider endpoint"}
+              disabled={aiVision.provider === "off"}
+              inputMode="url"
+            />
+          </label>
+          <label>
+            Model
+            <input
+              value={aiVision.model}
+              onChange={(event) => onUpdateAiVisionSettings({ model: event.target.value })}
+              placeholder={aiVision.provider === "wardrobe" ? "Optional" : "Vision model"}
+              disabled={aiVision.provider === "off" || aiVision.provider === "wardrobe"}
+            />
+          </label>
+          <label>
+            API key or token
+            <input
+              type="password"
+              value={aiVision.apiKey}
+              onChange={(event) => onUpdateAiVisionSettings({ apiKey: event.target.value })}
+              placeholder={aiVision.provider === "wardrobe" ? "Bearer token if required" : "Provider key"}
+              disabled={aiVision.provider === "off"}
+              autoComplete="off"
+            />
+          </label>
+          <div className="settings-note">
+            <StatusChip tone={isAiVisionConfigured(aiVision) ? "success" : "neutral"} icon={Wand2}>
+              {isAiVisionConfigured(aiVision) ? "Ready" : "Not configured"}
+            </StatusChip>
+            <span>Keys stay in this browser and are not included in exports.</span>
+          </div>
         </div>
       </div>
 
