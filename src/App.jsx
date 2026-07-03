@@ -3062,7 +3062,7 @@ function SettingsView({
               autoComplete="off"
             />
             <span className="field-help">
-              {aiVision.provider === "wardrobe" ? "Use a token if your endpoint requires one." : "Required for this provider."}
+              {aiVision.provider === "wardrobe" ? "Paste the token only. Bearer prefix is accepted." : "Required for this provider."}
             </span>
           </label>
           <div className="settings-note">

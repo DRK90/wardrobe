@@ -227,16 +227,16 @@ async function callWardrobeVisionApi(config, imageDataUrl, item) {
   if (item?.id) formData.append("external_item_id", item.id);
 
   const headers = {};
-  const apiKey = String(config.apiKey ?? "").trim();
+  const apiKey = cleanApiKey(config.apiKey);
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const response = await fetch(config.endpoint, { method: "POST", headers, body: formData });
+  const response = await fetchProvider(config.endpoint, { method: "POST", headers, body: formData });
   return readJsonResponse(response);
 }
 
 async function callOpenAi(config, imageDataUrl) {
-  const apiKey = String(config.apiKey ?? "").trim();
-  const response = await fetch(config.endpoint, {
+  const apiKey = cleanApiKey(config.apiKey);
+  const response = await fetchProvider(config.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -271,8 +271,8 @@ async function callOpenAi(config, imageDataUrl) {
 
 async function callAnthropic(config, imageDataUrl) {
   const { mimeType, base64 } = splitDataUrl(imageDataUrl);
-  const apiKey = String(config.apiKey ?? "").trim();
-  const response = await fetch(config.endpoint, {
+  const apiKey = cleanApiKey(config.apiKey);
+  const response = await fetchProvider(config.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -301,8 +301,8 @@ async function callAnthropic(config, imageDataUrl) {
 
 async function callGoogle(config, imageDataUrl) {
   const { mimeType, base64 } = splitDataUrl(imageDataUrl);
-  const apiKey = String(config.apiKey ?? "").trim();
-  const response = await fetch(config.endpoint, {
+  const apiKey = cleanApiKey(config.apiKey);
+  const response = await fetchProvider(config.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -329,14 +329,36 @@ async function readJsonResponse(response) {
   }
 
   if (!response.ok) {
-    const message =
+    const detail =
       payload?.detail ??
       payload?.error?.message ??
       payload?.message ??
       `Provider request failed with ${response.status}`;
-    throw new Error(message);
+    throw new Error(providerErrorMessage(response.status, detail));
   }
   return payload;
+}
+
+async function fetchProvider(endpoint, options) {
+  try {
+    return await fetch(endpoint, options);
+  } catch (error) {
+    throw new Error(`AI endpoint unreachable. Check the endpoint URL, HTTPS, and network access. ${error.message}`);
+  }
+}
+
+function cleanApiKey(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+}
+
+function providerErrorMessage(status, detail) {
+  if (status === 401) return "Unauthorized. Check the AI token in Settings.";
+  if (status === 404) return "Endpoint not found. Check the full AI endpoint URL in Settings.";
+  if (status === 405) return "Endpoint does not accept image uploads. Check the AI endpoint URL in Settings.";
+  return detail || `Provider request failed with ${status}`;
 }
 
 function splitDataUrl(dataUrl) {
