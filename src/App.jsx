@@ -61,6 +61,7 @@ import {
   weatherToRequest
 } from "./weather.js";
 import {
+  aiVisionConfigStatus,
   aiVisionDefaultsForProvider,
   aiVisionProviderOptions,
   defaultAiVisionSettings,
@@ -1809,12 +1810,22 @@ function DetailField({ label, value }) {
   );
 }
 
-function AiEnrichmentPanel({ configured, hasImage, status, onEnrich, onOpenSettings, summary, compact = false }) {
+function AiEnrichmentPanel({
+  configStatus,
+  configured,
+  hasImage,
+  status,
+  onEnrich,
+  onOpenSettings,
+  summary,
+  compact = false
+}) {
   const loading = status?.state === "loading";
   const state = status?.state ?? "idle";
+  const ready = configStatus?.ready ?? configured;
   const message =
     status?.message ||
-    (!configured ? "Set a provider in Settings." : !hasImage ? "Add a photo first." : "Draft fields stay editable.");
+    (!ready ? configStatus?.message ?? "Set up AI enrichment in Settings." : !hasImage ? "Add a photo first." : "Draft fields stay editable.");
 
   return (
     <div className={compact ? "ai-panel compact" : "ai-panel"} {...componentMeta("AiEnrichmentPanel")}>
@@ -1830,13 +1841,13 @@ function AiEnrichmentPanel({ configured, hasImage, status, onEnrich, onOpenSetti
         <button
           className="primary-button"
           type="button"
-          disabled={!hasImage || !configured || loading}
+          disabled={!hasImage || !ready || loading}
           onClick={onEnrich}
         >
           <Wand2 size={16} aria-hidden="true" />
           {loading ? "Reading" : "Enrich with AI"}
         </button>
-        {!configured ? (
+        {!ready ? (
           <button className="secondary-button" type="button" onClick={onOpenSettings}>
             <Settings size={16} aria-hidden="true" />
             Settings
@@ -1864,7 +1875,7 @@ function AiEvidencePanel({ draft }) {
 }
 
 function ItemDetailPanel({ item, aiVision, aiStatus, onEnrich, onOpenSettings, onClose }) {
-  const aiConfigured = isAiVisionConfigured(aiVision);
+  const configStatus = aiVisionConfigStatus(aiVision);
   const details = [
     ["Category", labelFor(item.category)],
     ["Subcategory", item.subcategory],
@@ -1906,7 +1917,7 @@ function ItemDetailPanel({ item, aiVision, aiStatus, onEnrich, onOpenSettings, o
       </div>
       <AiEnrichmentPanel
         compact
-        configured={aiConfigured}
+        configStatus={configStatus}
         hasImage={Boolean(item.imageDataUrl)}
         status={aiStatus}
         onEnrich={onEnrich}
@@ -2702,7 +2713,7 @@ function SlotPicker({ slot, title, query, setQuery, allItems, candidates, exclud
 }
 
 function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, onOpenSettings, onResetAiStatus }) {
-  const aiConfigured = isAiVisionConfigured(aiVision);
+  const configStatus = aiVisionConfigStatus(aiVision);
 
   function setField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -2767,7 +2778,7 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
             ) : null}
           </div>
           <AiEnrichmentPanel
-            configured={aiConfigured}
+            configStatus={configStatus}
             hasImage={Boolean(form.imageDataUrl)}
             status={aiStatus}
             onEnrich={onEnrich}
@@ -2946,6 +2957,8 @@ function SettingsView({
   starterItemCount
 }) {
   const aiVision = normalizeAiVisionSettings(settings.aiVision);
+  const aiStatus = aiVisionConfigStatus(aiVision);
+  const missingAiFields = new Set(aiStatus.missing);
 
   function updateProvider(provider) {
     const defaults = aiVisionDefaultsForProvider(provider);
@@ -2953,7 +2966,7 @@ function SettingsView({
       provider,
       endpoint: defaults.endpoint,
       model: defaults.model,
-      apiKey: ""
+      apiKey: provider === "off" ? "" : aiVision.apiKey
     });
   }
 
@@ -3007,38 +3020,56 @@ function SettingsView({
           <label>
             API endpoint
             <input
+              className={missingAiFields.has("API endpoint") ? "field-missing" : ""}
               value={aiVision.endpoint}
               onChange={(event) => onUpdateAiVisionSettings({ endpoint: event.target.value })}
               placeholder={aiVision.provider === "wardrobe" ? "http://host:8114" : "Provider endpoint"}
               disabled={aiVision.provider === "off"}
+              required={aiVision.provider !== "off"}
+              aria-invalid={missingAiFields.has("API endpoint")}
               inputMode="url"
             />
+            <span className="field-help">
+              {aiVision.provider === "wardrobe" ? "Base URL only. The app adds /v1/vision/observe." : "Provider API URL."}
+            </span>
           </label>
           <label>
             Model
             <input
+              className={missingAiFields.has("Model") ? "field-missing" : ""}
               value={aiVision.model}
               onChange={(event) => onUpdateAiVisionSettings({ model: event.target.value })}
               placeholder={aiVision.provider === "wardrobe" ? "Optional" : "Vision model"}
               disabled={aiVision.provider === "off" || aiVision.provider === "wardrobe"}
+              required={aiVision.provider !== "off" && aiVision.provider !== "wardrobe"}
+              aria-invalid={missingAiFields.has("Model")}
             />
+            <span className="field-help">
+              {aiVision.provider === "wardrobe" ? "Not used for Wardrobe Vision API." : "Required by hosted model providers."}
+            </span>
           </label>
           <label>
             API key or token
             <input
+              className={missingAiFields.has("API key") ? "field-missing" : ""}
               type="password"
               value={aiVision.apiKey}
               onChange={(event) => onUpdateAiVisionSettings({ apiKey: event.target.value })}
               placeholder={aiVision.provider === "wardrobe" ? "Bearer token if required" : "Provider key"}
               disabled={aiVision.provider === "off"}
+              required={aiVision.provider !== "off" && aiVision.provider !== "wardrobe"}
+              aria-invalid={missingAiFields.has("API key")}
               autoComplete="off"
             />
+            <span className="field-help">
+              {aiVision.provider === "wardrobe" ? "Use a token if your endpoint requires one." : "Required for this provider."}
+            </span>
           </label>
           <div className="settings-note">
-            <StatusChip tone={isAiVisionConfigured(aiVision) ? "success" : "neutral"} icon={Wand2}>
-              {isAiVisionConfigured(aiVision) ? "Ready" : "Not configured"}
+            <StatusChip tone={aiStatus.tone} icon={Wand2}>
+              {aiStatus.ready ? "Ready" : "Needs setup"}
             </StatusChip>
-            <span>Keys stay in this browser and are not included in exports.</span>
+            <span>{aiStatus.ready ? "Keys stay in this browser and are not included in exports." : aiStatus.message}</span>
           </div>
         </div>
       </div>

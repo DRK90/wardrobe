@@ -1,4 +1,4 @@
-const CACHE_NAME = "wardrobe-shell-v4";
+const CACHE_NAME = "wardrobe-shell-v5";
 const APP_SHELL = [
   "/",
   "/index.html",
@@ -29,7 +29,7 @@ self.addEventListener("fetch", (event) => {
 
   if (event.request.mode === "navigate" || url.pathname === "/" || url.pathname === "/index.html") {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: "no-store" })
         .then((response) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put("/index.html", copy));

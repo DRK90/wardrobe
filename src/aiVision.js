@@ -117,8 +117,8 @@ export function normalizeAiVisionSettings(settings) {
   return {
     ...defaultAiVisionSettings,
     provider,
-    endpoint: settings?.endpoint || defaults.endpoint || "",
-    model: settings?.model || defaults.model || "",
+    endpoint: String(settings?.endpoint || defaults.endpoint || "").trim(),
+    model: String(settings?.model || defaults.model || "").trim(),
     apiKey: settings?.apiKey ?? ""
   };
 }
@@ -128,10 +128,31 @@ export function aiVisionDefaultsForProvider(provider) {
 }
 
 export function isAiVisionConfigured(settings) {
+  return aiVisionConfigStatus(settings).ready;
+}
+
+export function aiVisionConfigStatus(settings) {
   const config = normalizeAiVisionSettings(settings);
-  if (config.provider === "off") return false;
-  if (config.provider === "wardrobe") return Boolean(config.endpoint);
-  return Boolean(config.endpoint && config.model && config.apiKey);
+  if (config.provider === "off") {
+    return {
+      ready: false,
+      tone: "neutral",
+      message: "Choose a provider.",
+      missing: ["Provider"]
+    };
+  }
+
+  const missing = [];
+  if (!config.endpoint) missing.push("API endpoint");
+  if (config.provider !== "wardrobe" && !config.model) missing.push("Model");
+  if (config.provider !== "wardrobe" && !String(config.apiKey ?? "").trim()) missing.push("API key");
+
+  return {
+    ready: missing.length === 0,
+    tone: missing.length ? "warning" : "success",
+    message: missing.length ? `${missing.join(", ")} required.` : "Ready",
+    missing
+  };
 }
 
 export async function enrichItemFromImage({ config, imageDataUrl, item }) {
@@ -207,18 +228,20 @@ async function callWardrobeVisionApi(config, imageDataUrl, item) {
   if (item?.id) formData.append("external_item_id", item.id);
 
   const headers = {};
-  if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`;
+  const apiKey = String(config.apiKey ?? "").trim();
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
   const response = await fetch(endpoint, { method: "POST", headers, body: formData });
   return readJsonResponse(response);
 }
 
 async function callOpenAi(config, imageDataUrl) {
+  const apiKey = String(config.apiKey ?? "").trim();
   const response = await fetch(config.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`
+      Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
       model: config.model,
@@ -249,11 +272,12 @@ async function callOpenAi(config, imageDataUrl) {
 
 async function callAnthropic(config, imageDataUrl) {
   const { mimeType, base64 } = splitDataUrl(imageDataUrl);
+  const apiKey = String(config.apiKey ?? "").trim();
   const response = await fetch(config.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": config.apiKey,
+      "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
       "anthropic-dangerous-direct-browser-access": "true"
     },
@@ -278,11 +302,12 @@ async function callAnthropic(config, imageDataUrl) {
 
 async function callGoogle(config, imageDataUrl) {
   const { mimeType, base64 } = splitDataUrl(imageDataUrl);
+  const apiKey = String(config.apiKey ?? "").trim();
   const response = await fetch(config.endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-goog-api-key": config.apiKey
+      "x-goog-api-key": apiKey
     },
     body: JSON.stringify({
       model: config.model,
