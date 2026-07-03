@@ -268,8 +268,20 @@ function scoreItem(item, slot, request, usedIds, selections) {
   const rainFit = (weather.rainPct >= 50 ? (item.rain ?? 0) * 3 - 4 : Math.max(0, 4 - (item.rain ?? 0))) * weather.weatherWeight;
   const windFit = (weather.windMph >= 16 ? (item.wind ?? 0) * 2 - 2 : 1) * weather.weatherWeight;
   const formalityFit = Math.max(-8, 11 - Math.abs((item.formality ?? 3) - request.formality) * 2.75);
+  const daysSinceLastWear = daysSince(item.lastWorn);
   const underusedFit = request.underused ? Math.max(0, 12 - Math.min(item.wears ?? 0, 12)) : 0;
-  const recencyFit = Math.min(8, daysSince(item.lastWorn) / 3);
+  const recencyFit = request.underused
+    ? Math.min(14, daysSinceLastWear / 2.2)
+    : Math.min(6, daysSinceLastWear / 4);
+  const recentWearPenalty = request.underused
+    ? daysSinceLastWear <= 1
+      ? -12
+      : daysSinceLastWear <= 3
+        ? -8
+        : daysSinceLastWear <= 7
+          ? -4
+          : 0
+    : 0;
   const variation = ((request.seed ?? 0) * 17 + item.id.length * 13 + slot.length * 7) % 7;
   const inferredWeatherFit = (itemWeatherFit(item, request).score - 60) / 2.7;
   const colorFit = colorHarmonyScore(item, selectedWithoutSlot(selections, slot));
@@ -290,6 +302,7 @@ function scoreItem(item, slot, request, usedIds, selections) {
     layerFit +
     underusedFit +
     recencyFit +
+    recentWearPenalty +
     variation
   );
 }

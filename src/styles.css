@@ -1434,6 +1434,13 @@ textarea {
   height: 15px;
 }
 
+.compact-checkbox {
+  min-height: 36px;
+  align-items: center;
+  color: var(--color-ink);
+  font-size: 0.8rem;
+}
+
 .outfit-panel {
   overflow: hidden;
 }

@@ -24,7 +24,7 @@ export const categoryOptions = [
 
 export const seasonOptions = ["spring", "summer", "fall", "winter"];
 export const climateOptions = ["hot", "mild", "cool", "cold", "rain", "wind", "snow"];
-export const laundryOptions = ["ready", "worn", "dirty", "repair"];
+export const laundryOptions = ["ready", "dirty", "repair"];
 export const slotOrder = ["outerwear", "top", "bottom", "shoes", "accessory"];
 
 export const weatherPresets = [

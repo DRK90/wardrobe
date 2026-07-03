@@ -283,7 +283,6 @@ const friendlyLabels = {
   active: "Active",
   archived: "Archived",
   ready: "Ready",
-  worn: "Worn",
   dirty: "Dirty",
   repair: "Repair",
   spring: "Spring",
@@ -427,6 +426,7 @@ function costPerWear(item) {
 }
 
 function normalizeItem(form) {
+  const laundry = form.laundry === "worn" ? "ready" : form.laundry || "ready";
   return {
     ...newItemTemplate,
     ...form,
@@ -443,7 +443,7 @@ function normalizeItem(form) {
     acquired: form.acquired || todayIso(),
     lastWorn: form.lastWorn || "",
     status: form.status || "active",
-    laundry: form.laundry || "ready",
+    laundry: laundryOptions.includes(laundry) ? laundry : "ready",
     outfitTags: form.outfitTags?.length ? form.outfitTags : ["daily"],
     season: form.season?.length ? form.season : ["spring", "fall"],
     climate: form.climate?.length ? form.climate : ["mild"],
@@ -1273,7 +1273,7 @@ function App() {
     );
   }
 
-  function markTodayOutfitWorn(planId) {
+  function markTodayOutfitWorn(planId, options = {}) {
     const plan = todayOutfits.find((candidate) => candidate.id === planId);
     const entries = outfitEntries(plan?.outfit?.selections);
     const uniqueEntries = entries.filter(([, item], index, list) => list.findIndex(([, candidate]) => candidate.id === item.id) === index);
@@ -1285,13 +1285,14 @@ function App() {
 
     const wornDate = todayIso();
     const wornAt = new Date().toISOString();
+    const markDirty = Boolean(options.markDirty);
     const nextItems = items.map((item) =>
       wornIds.has(item.id)
         ? {
             ...item,
             wears: Number(item.wears || 0) + 1,
             lastWorn: wornDate,
-            laundry: item.laundry === "ready" ? "worn" : item.laundry
+            laundry: markDirty ? "dirty" : item.laundry === "worn" ? "ready" : item.laundry
           }
         : item
     );
@@ -1302,6 +1303,7 @@ function App() {
       wornAt,
       wornDate,
       source: "today",
+      markedDirty: markDirty,
       outfitId: plan.id,
       outfitLabel: plan.label
     }));
@@ -1316,7 +1318,11 @@ function App() {
         lastWornDate: candidate.id === planId ? wornDate : candidate.lastWornDate
       }))
     );
-    showToast(`${uniqueEntries.length} item${uniqueEntries.length === 1 ? "" : "s"} marked worn`);
+    showToast(
+      `${uniqueEntries.length} item${uniqueEntries.length === 1 ? "" : "s"} ${
+        markDirty ? "logged and marked dirty" : "wear logged"
+      }`
+    );
   }
 
   function generateCurrentOutfit(nextRequest = request, nextOverrides = outfitOverrides, surface = "planner") {
@@ -1728,6 +1734,7 @@ function TodayOutfitCard({
 }) {
   const selectedItems = outfitEntries(plan.outfit?.selections);
   const wornToday = plan.lastWornDate === todayIso();
+  const [markDirty, setMarkDirty] = useState(false);
 
   return (
     <section className="panel outfit-panel today-outfit-card" {...componentMeta("TodayOutfitCard")}>
@@ -1749,11 +1756,20 @@ function TodayOutfitCard({
             className="primary-button"
             type="button"
             disabled={!selectedItems.length || wornToday}
-            onClick={() => onMarkWorn(plan.id)}
+            onClick={() => onMarkWorn(plan.id, { markDirty })}
           >
             <Check size={16} aria-hidden="true" />
-            {wornToday ? "Worn today" : "Mark worn"}
+            {wornToday ? "Logged today" : "Mark worn"}
           </button>
+          <label className="checkbox-line compact-checkbox">
+            <input
+              type="checkbox"
+              checked={markDirty}
+              disabled={!selectedItems.length || wornToday}
+              onChange={(event) => setMarkDirty(event.target.checked)}
+            />
+            Mark dirty
+          </label>
           {canRemove ? (
             <button className="row-remove" type="button" aria-label={`Remove ${plan.label}`} onClick={() => onRemoveOutfit(plan.id)}>
               <X size={15} aria-hidden="true" />
@@ -2707,7 +2723,7 @@ function InventoryView({
     ["wears", "Wears"],
     ["costPerWear", "Cost/wear"],
     ["lastWorn", "Last worn"],
-    ["laundry", "Status"]
+    ["laundry", "Laundry"]
   ];
 
   return (
@@ -2786,7 +2802,7 @@ function InventoryView({
               <th />
               <th />
               <th>
-                <select aria-label="Filter status" value={filters.laundry} onChange={(event) => updateFilter("laundry", event.target.value)}>
+                <select aria-label="Filter laundry" value={filters.laundry} onChange={(event) => updateFilter("laundry", event.target.value)}>
                   {["all", ...laundryOptions].map((option) => (
                     <option key={option} value={option}>{labelFor(option)}</option>
                   ))}
