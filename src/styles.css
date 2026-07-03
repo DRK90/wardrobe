@@ -1211,6 +1211,7 @@ textarea {
 
 .item-photo-actions > div,
 .item-modal-section-header,
+.photo-source-actions,
 .evidence-photo-actions {
   display: flex;
   align-items: center;

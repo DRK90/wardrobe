@@ -1922,6 +1922,26 @@ function AiEvidencePanel({ draft }) {
   );
 }
 
+function ImageFileButton({ label, icon: Icon = ImagePlus, capture = false, multiple = false, onSelect }) {
+  return (
+    <label className="secondary-button">
+      <Icon size={16} aria-hidden="true" />
+      {label}
+      <input
+        type="file"
+        accept="image/*"
+        capture={capture ? "environment" : undefined}
+        multiple={multiple}
+        onChange={(event) => {
+          onSelect(event.target.files);
+          event.target.value = "";
+        }}
+        hidden
+      />
+    </label>
+  );
+}
+
 function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, onSave, onClose }) {
   const [draft, setDraft] = useState(() => normalizeItem(item));
   const configStatus = aiVisionConfigStatus(aiVision);
@@ -2057,20 +2077,13 @@ function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, o
               <div className="item-photo-actions">
                 <strong>Primary photo</strong>
                 <div>
-                  <label className="secondary-button">
-                    <ImagePlus size={16} aria-hidden="true" />
-                    Replace
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      onChange={(event) => {
-                        updatePrimaryPhoto(event.target.files?.[0]);
-                        event.target.value = "";
-                      }}
-                      hidden
-                    />
-                  </label>
+                  <ImageFileButton
+                    label="Take photo"
+                    icon={Camera}
+                    capture
+                    onSelect={(files) => updatePrimaryPhoto(files?.[0])}
+                  />
+                  <ImageFileButton label="Choose photo" onSelect={(files) => updatePrimaryPhoto(files?.[0])} />
                   {draft.imageDataUrl ? (
                     <button className="secondary-button" type="button" onClick={() => setField("imageDataUrl", "")}>
                       Remove
@@ -2081,21 +2094,10 @@ function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, o
               <div className="evidence-photo-section">
                 <div className="item-modal-section-header">
                   <strong>Extra images</strong>
-                  <label className="secondary-button">
-                    <ImagePlus size={16} aria-hidden="true" />
-                    Add image
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      multiple
-                      onChange={(event) => {
-                        addEvidencePhotos(event.target.files);
-                        event.target.value = "";
-                      }}
-                      hidden
-                    />
-                  </label>
+                  <div className="photo-source-actions">
+                    <ImageFileButton label="Take photo" icon={Camera} capture onSelect={addEvidencePhotos} />
+                    <ImageFileButton label="Choose images" multiple onSelect={addEvidencePhotos} />
+                  </div>
                 </div>
                 {draft.evidencePhotos?.length ? (
                   <div className="evidence-photo-grid">
@@ -3102,11 +3104,8 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
             {form.imageDataUrl ? <img src={form.imageDataUrl} alt="" /> : <Camera size={30} aria-hidden="true" />}
           </div>
           <div className="image-actions">
-            <label className="secondary-button">
-              <ImagePlus size={16} aria-hidden="true" />
-              Photo
-              <input type="file" accept="image/*" capture="environment" onChange={(event) => readImage(event.target.files?.[0])} hidden />
-            </label>
+            <ImageFileButton label="Take photo" icon={Camera} capture onSelect={(files) => readImage(files?.[0])} />
+            <ImageFileButton label="Choose photo" onSelect={(files) => readImage(files?.[0])} />
             {form.imageDataUrl ? (
               <button
                 className="secondary-button"
