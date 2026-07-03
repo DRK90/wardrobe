@@ -94,15 +94,23 @@ function hueDistance(first, second) {
   return Math.min(distance, 360 - distance);
 }
 
+function selectionList(value) {
+  if (Array.isArray(value)) return value.filter(Boolean);
+  return value ? [value] : [];
+}
+
 function selectedItems(selections) {
-  return Object.values(selections ?? {}).filter(Boolean);
+  return Object.values(selections ?? {}).flatMap(selectionList);
 }
 
 function selectedWithoutSlot(selections, slot) {
   return Object.entries(selections ?? {})
     .filter(([key]) => key !== slot)
-    .map(([, item]) => item)
-    .filter(Boolean);
+    .flatMap(([, value]) => selectionList(value));
+}
+
+function primarySelected(selections, slot) {
+  return selectionList(selections?.[slot])[0] ?? null;
 }
 
 function colorHarmonyScore(item, selections) {
@@ -183,7 +191,7 @@ function layerCompatibilityScore(item, slot, request, selections) {
   let score = 0;
 
   if (slot === "outerwear") {
-    const top = selections.top;
+    const top = primarySelected(selections, "top");
     if (role === "base") score -= 8;
     if (/shell|outer|insulation/.test(role)) score += 3;
     if (weather.tempF <= 45) score += warmth >= 4 ? 8 : -8;

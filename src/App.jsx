@@ -137,7 +137,9 @@ const newItemTemplate = {
   formality: 3,
   condition: 4,
   cost: 0,
+  wears: 0,
   acquired: "",
+  lastWorn: "",
   laundry: "ready",
   status: "active",
   outfitTags: ["daily"],
@@ -255,6 +257,11 @@ const costOptions = [0, 25, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500, 750,
   (value) => ({ value, label: money(value) })
 );
 
+const wearCountOptions = [0, 1, 2, 3, 4, 5, 8, 10, 12, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200].map((value) => ({
+  value,
+  label: String(value)
+}));
+
 const friendlyLabels = {
   all: "Any",
   daily: "Daily",
@@ -337,6 +344,51 @@ function makeId(prefix) {
     globalThis.crypto?.randomUUID?.() ??
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   return `${prefix}-${randomId}`;
+}
+
+function defaultPlannerRequest() {
+  return {
+    outfitCategory: "professional",
+    eventDate: tomorrowIso(),
+    eventTime: "09:00",
+    eventLocation: "home",
+    planLocationEnabled: false,
+    planZip: "",
+    tempF: 67,
+    rainPct: 12,
+    windMph: 6,
+    exposure: "mixed",
+    formality: 4,
+    season: "spring",
+    underused: true,
+    seed: 1
+  };
+}
+
+function defaultTodayRequest(seed = 1) {
+  return {
+    ...defaultPlannerRequest(),
+    outfitCategory: "daily",
+    eventDate: todayIso(),
+    eventLocation: "home",
+    formality: 2,
+    seed
+  };
+}
+
+function createTodayOutfitPlan(index = 1, requestPatch = {}) {
+  return {
+    id: makeId("today-outfit"),
+    label: `Outfit ${index}`,
+    request: {
+      ...defaultTodayRequest(index),
+      ...requestPatch,
+      eventDate: todayIso()
+    },
+    overrides: {},
+    outfit: null,
+    lastWornDate: ""
+  };
 }
 
 function normalizeEvidencePhotos(photos) {
@@ -599,22 +651,8 @@ function App() {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState(filterDefaults);
   const [sort, setSort] = useState({ key: "name", dir: "asc" });
-  const [request, setRequest] = useState({
-    outfitCategory: "professional",
-    eventDate: tomorrowIso(),
-    eventTime: "09:00",
-    eventLocation: "home",
-    planLocationEnabled: false,
-    planZip: "",
-    tempF: 67,
-    rainPct: 12,
-    windMph: 6,
-    exposure: "mixed",
-    formality: 4,
-    season: "spring",
-    underused: true,
-    seed: 1
-  });
+  const [request, setRequest] = useState(() => defaultPlannerRequest());
+  const [todayOutfits, setTodayOutfits] = useState(() => [createTodayOutfitPlan(1)]);
   const [eventForecastStatus, setEventForecastStatus] = useState({ state: "idle", message: "" });
   const [generatedOutfit, setGeneratedOutfit] = useState(null);
   const [outfitOverrides, setOutfitOverrides] = useState({});
@@ -644,6 +682,20 @@ function App() {
       setWearLogs(storedWearLogs);
       setWeatherCache({ ...emptyWeatherCache, ...(storedWeatherCache ?? {}) });
       setGeneratedOutfit(generateOutfit(nextItems, request));
+      setTodayOutfits((current) =>
+        current.map((plan) => {
+          const plannedRequest = {
+            ...plan.request,
+            eventDate: todayIso(),
+            eventLocation: nextSettings.destinationEnabled ? "destination" : "home"
+          };
+          return {
+            ...plan,
+            request: plannedRequest,
+            outfit: generateOutfit(nextItems, plannedRequest, plan.overrides ?? {})
+          };
+        })
+      );
       setLoaded(true);
     }
     hydrate();
@@ -729,6 +781,24 @@ function App() {
     setRequest(weatherRequest);
     setGeneratedOutfit(generateOutfit(items, weatherRequest, outfitOverrides));
   }, [loaded, weatherCache.home, weatherCache.plan, settings.homeZip, request.planLocationEnabled, request.planZip]);
+
+  useEffect(() => {
+    if (!loaded || !items.length) return;
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        const weatherRequest = requestWithKnownWeather(plan.request, "today");
+        const changed = ["eventLocation", "eventDate", "tempF", "rainPct", "windMph", "season"].some(
+          (key) => weatherRequest[key] !== plan.request[key]
+        );
+        if (!changed && plan.outfit) return plan;
+        return {
+          ...plan,
+          request: weatherRequest,
+          outfit: generateOutfit(items, weatherRequest, plan.overrides ?? {})
+        };
+      })
+    );
+  }, [loaded, weatherCache.home, weatherCache.destination, settings.homeZip, settings.destinationEnabled, settings.destinationZip]);
 
   const visibleItems = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -911,25 +981,15 @@ function App() {
 
   function saveInventoryItem(updatedItem) {
     const normalized = normalizeItem(updatedItem);
-    setItems((current) => current.map((candidate) => (candidate.id === normalized.id ? normalized : candidate)));
-    setGeneratedOutfit((current) => {
-      if (!current) return current;
-      const nextSelections = Object.fromEntries(
-        Object.entries(current.selections ?? {}).map(([slot, selected]) => [
-          slot,
-          selectionItems({ [slot]: selected }, slot).map((item) => (item.id === normalized.id ? normalized : item))
-        ])
-      );
-      const nextAlternatives = Object.fromEntries(
-        Object.entries(current.alternatives ?? {}).map(([slot, alternatives]) => [
-          slot,
-          alternatives.map((candidate) =>
-            candidate.item?.id === normalized.id ? { ...candidate, item: normalized } : candidate
-          )
-        ])
-      );
-      return { ...current, selections: nextSelections, alternatives: nextAlternatives };
-    });
+    const nextItems = items.map((candidate) => (candidate.id === normalized.id ? normalized : candidate));
+    setItems(nextItems);
+    setGeneratedOutfit((current) => syncOutfitItems(current, nextItems));
+    setTodayOutfits((current) =>
+      current.map((plan) => ({
+        ...plan,
+        outfit: syncOutfitItems(plan.outfit, nextItems)
+      }))
+    );
     showToast("Item saved");
   }
 
@@ -1017,22 +1077,29 @@ function App() {
       }));
     }
     setInventoryAiStatus((current) => (current.itemId === id ? emptyInventoryAiStatus : current));
-    setItems((current) => current.filter((candidate) => candidate.id !== id));
-    setGeneratedOutfit((current) => {
-      if (!current) return current;
-      const nextSelections = Object.fromEntries(
-        Object.entries(current.selections)
-          .map(([slot, selected]) => [slot, selectionItems({ [slot]: selected }, slot).filter((item) => item.id !== id)])
-          .filter(([, selected]) => selected.length)
-      );
-      return { ...current, selections: nextSelections };
-    });
+    const nextItems = items.filter((candidate) => candidate.id !== id);
+    setItems(nextItems);
+    setGeneratedOutfit((current) => syncOutfitItems(current, nextItems));
     setOutfitOverrides((current) =>
       Object.fromEntries(
         Object.entries(current)
           .map(([slot, itemIds]) => [slot, itemIds.filter((itemId) => itemId !== id)])
           .filter(([, itemIds]) => itemIds.length)
       )
+    );
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        const nextOverrides = Object.fromEntries(
+          Object.entries(plan.overrides ?? {})
+            .map(([slot, itemIds]) => [slot, itemIds.filter((itemId) => itemId !== id)])
+            .filter(([, itemIds]) => itemIds.length)
+        );
+        return {
+          ...plan,
+          overrides: nextOverrides,
+          outfit: syncOutfitItems(plan.outfit, nextItems)
+        };
+      })
     );
     showToast("Item removed");
   }
@@ -1058,7 +1125,198 @@ function App() {
     setItems(nextItems);
     setOutfitOverrides(nextOverrides);
     setGeneratedOutfit(generateOutfit(nextItems, requestWithKnownWeather(request, "planner"), nextOverrides));
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        const nextPlanOverrides = Object.fromEntries(
+          Object.entries(plan.overrides ?? {})
+            .map(([slot, itemIds]) => [slot, itemIds.filter((itemId) => !starterIds.has(itemId))])
+            .filter(([, itemIds]) => itemIds.length)
+        );
+        const weatherRequest = requestWithKnownWeather(plan.request, "today");
+        return {
+          ...plan,
+          request: weatherRequest,
+          overrides: nextPlanOverrides,
+          outfit: generateOutfit(nextItems, weatherRequest, nextPlanOverrides)
+        };
+      })
+    );
     showToast("Starter wardrobe removed");
+  }
+
+  function generateTodayOutfit(planId, nextRequest = null, nextOverrides = null) {
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan;
+        const overrides = nextOverrides ?? plan.overrides ?? {};
+        const weatherRequest = requestWithKnownWeather(nextRequest ?? plan.request, "today");
+        return {
+          ...plan,
+          request: weatherRequest,
+          overrides,
+          outfit: generateOutfit(items, weatherRequest, overrides),
+          lastWornDate: ""
+        };
+      })
+    );
+  }
+
+  function updateTodayOutfitRequest(planId, patch) {
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan;
+        const weatherRequest = requestWithKnownWeather({ ...plan.request, ...patch }, "today");
+        return {
+          ...plan,
+          request: weatherRequest,
+          outfit: generateOutfit(items, weatherRequest, plan.overrides ?? {}),
+          lastWornDate: ""
+        };
+      })
+    );
+  }
+
+  function addTodayOutfit() {
+    setTodayOutfits((current) => {
+      const index = current.length + 1;
+      const previousRequest = current.at(-1)?.request ?? defaultTodayRequest(index);
+      const nextPlan = createTodayOutfitPlan(index, {
+        outfitCategory: previousRequest.outfitCategory,
+        exposure: previousRequest.exposure,
+        formality: previousRequest.formality,
+        underused: previousRequest.underused,
+        seed: index
+      });
+      const weatherRequest = requestWithKnownWeather(nextPlan.request, "today");
+      return [
+        ...current,
+        {
+          ...nextPlan,
+          request: weatherRequest,
+          outfit: generateOutfit(items, weatherRequest, nextPlan.overrides)
+        }
+      ];
+    });
+  }
+
+  function removeTodayOutfit(planId) {
+    setTodayOutfits((current) => (current.length <= 1 ? current : current.filter((plan) => plan.id !== planId)));
+  }
+
+  function regenerateTodayOutfit(planId) {
+    const plan = todayOutfits.find((candidate) => candidate.id === planId);
+    if (!plan) return;
+    generateTodayOutfit(planId, { ...plan.request, seed: (plan.request.seed ?? 1) + 1 }, plan.overrides ?? {});
+  }
+
+  function chooseTodayOutfitItem(planId, slot, itemId, options = {}) {
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan;
+        const currentIds =
+          plan.overrides?.[slot] ?? selectionItems(plan.outfit?.selections ?? {}, slot).map((item) => item.id);
+        const nextSlotIds = options.append ? [...currentIds.filter((id) => id !== itemId), itemId] : [itemId];
+        const nextOverrides = { ...(plan.overrides ?? {}), [slot]: nextSlotIds };
+        const weatherRequest = requestWithKnownWeather(plan.request, "today");
+        return {
+          ...plan,
+          request: weatherRequest,
+          overrides: nextOverrides,
+          outfit: generateOutfit(items, weatherRequest, nextOverrides),
+          lastWornDate: ""
+        };
+      })
+    );
+  }
+
+  function changeTodayOutfitItem(planId, slot, index, itemId) {
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan;
+        const currentIds =
+          plan.overrides?.[slot] ?? selectionItems(plan.outfit?.selections ?? {}, slot).map((item) => item.id);
+        const nextSlotIds = currentIds.length ? [...currentIds] : [itemId];
+        nextSlotIds[index] = itemId;
+        const dedupedSlotIds = nextSlotIds.filter((id, idIndex, ids) => id && ids.indexOf(id) === idIndex);
+        const nextOverrides = { ...(plan.overrides ?? {}), [slot]: dedupedSlotIds };
+        const weatherRequest = requestWithKnownWeather(plan.request, "today");
+        return {
+          ...plan,
+          request: weatherRequest,
+          overrides: nextOverrides,
+          outfit: generateOutfit(items, weatherRequest, nextOverrides),
+          lastWornDate: ""
+        };
+      })
+    );
+  }
+
+  function removeTodayOutfitItem(planId, slot, itemId) {
+    setTodayOutfits((current) =>
+      current.map((plan) => {
+        if (plan.id !== planId) return plan;
+        const currentIds =
+          plan.overrides?.[slot] ?? selectionItems(plan.outfit?.selections ?? {}, slot).map((item) => item.id);
+        const nextSlotIds = currentIds.filter((id) => id !== itemId);
+        const nextOverrides = { ...(plan.overrides ?? {}) };
+        if (nextSlotIds.length) nextOverrides[slot] = nextSlotIds;
+        else delete nextOverrides[slot];
+        const weatherRequest = requestWithKnownWeather(plan.request, "today");
+        return {
+          ...plan,
+          request: weatherRequest,
+          overrides: nextOverrides,
+          outfit: generateOutfit(items, weatherRequest, nextOverrides),
+          lastWornDate: ""
+        };
+      })
+    );
+  }
+
+  function markTodayOutfitWorn(planId) {
+    const plan = todayOutfits.find((candidate) => candidate.id === planId);
+    const entries = outfitEntries(plan?.outfit?.selections);
+    const uniqueEntries = entries.filter(([, item], index, list) => list.findIndex(([, candidate]) => candidate.id === item.id) === index);
+    const wornIds = new Set(uniqueEntries.map(([, item]) => item.id));
+    if (!plan || !wornIds.size) {
+      showToast("Add outfit items first");
+      return;
+    }
+
+    const wornDate = todayIso();
+    const wornAt = new Date().toISOString();
+    const nextItems = items.map((item) =>
+      wornIds.has(item.id)
+        ? {
+            ...item,
+            wears: Number(item.wears || 0) + 1,
+            lastWorn: wornDate,
+            laundry: item.laundry === "ready" ? "worn" : item.laundry
+          }
+        : item
+    );
+    const logs = uniqueEntries.map(([slot, item]) => ({
+      id: makeId("wear"),
+      itemId: item.id,
+      slot,
+      wornAt,
+      wornDate,
+      source: "today",
+      outfitId: plan.id,
+      outfitLabel: plan.label
+    }));
+
+    setItems(nextItems);
+    setWearLogs((current) => [...logs, ...current]);
+    setGeneratedOutfit((current) => syncOutfitItems(current, nextItems));
+    setTodayOutfits((current) =>
+      current.map((candidate) => ({
+        ...candidate,
+        outfit: syncOutfitItems(candidate.outfit, nextItems),
+        lastWornDate: candidate.id === planId ? wornDate : candidate.lastWornDate
+      }))
+    );
+    showToast(`${uniqueEntries.length} item${uniqueEntries.length === 1 ? "" : "s"} marked worn`);
   }
 
   function generateCurrentOutfit(nextRequest = request, nextOverrides = outfitOverrides, surface = "planner") {
@@ -1073,7 +1331,7 @@ function App() {
   }
 
   function chooseOutfitItem(slot, itemId, options = {}) {
-    const currentIds = outfitOverrides[slot] ?? generatedOutfit?.selections?.[slot]?.map((item) => item.id) ?? [];
+    const currentIds = outfitOverrides[slot] ?? selectionItems(generatedOutfit?.selections ?? {}, slot).map((item) => item.id);
     const nextSlotIds = options.append ? [...currentIds.filter((id) => id !== itemId), itemId] : [itemId];
     const nextOverrides = { ...outfitOverrides, [slot]: nextSlotIds };
     setOutfitOverrides(nextOverrides);
@@ -1081,7 +1339,7 @@ function App() {
   }
 
   function changeOutfitItem(slot, index, itemId, options = {}) {
-    const currentIds = outfitOverrides[slot] ?? generatedOutfit?.selections?.[slot]?.map((item) => item.id) ?? [];
+    const currentIds = outfitOverrides[slot] ?? selectionItems(generatedOutfit?.selections ?? {}, slot).map((item) => item.id);
     const nextSlotIds = currentIds.length ? [...currentIds] : [itemId];
     nextSlotIds[index] = itemId;
     const dedupedSlotIds = nextSlotIds.filter((id, idIndex, ids) => id && ids.indexOf(id) === idIndex);
@@ -1091,7 +1349,7 @@ function App() {
   }
 
   function removeOutfitItem(slot, itemId, surface = "planner") {
-    const currentIds = outfitOverrides[slot] ?? generatedOutfit?.selections?.[slot]?.map((item) => item.id) ?? [];
+    const currentIds = outfitOverrides[slot] ?? selectionItems(generatedOutfit?.selections ?? {}, slot).map((item) => item.id);
     const nextSlotIds = currentIds.filter((id) => id !== itemId);
     const nextOverrides = { ...outfitOverrides };
     if (nextSlotIds.length) nextOverrides[slot] = nextSlotIds;
@@ -1182,18 +1440,17 @@ function App() {
                 activeWeather={activeWeather}
                 onUpdateWeatherSettings={updateWeatherSettings}
                 onRefreshWeather={refreshWeather}
-                request={request}
-                setRequest={setRequest}
-                onUpdateRequest={updatePlannerRequest}
-                outfit={generatedOutfit}
-                onGenerate={() => generateCurrentOutfit(request, outfitOverrides, "today")}
-                onRegenerate={() => regenerateOutfit("today")}
-                onChooseItem={chooseOutfitItem}
-                onChangeItem={changeOutfitItem}
-                onRemoveItem={removeOutfitItem}
+                outfits={todayOutfits}
+                onAddOutfit={addTodayOutfit}
+                onRemoveOutfit={removeTodayOutfit}
+                onUpdateOutfitRequest={updateTodayOutfitRequest}
+                onGenerateOutfit={(planId) => generateTodayOutfit(planId)}
+                onRegenerateOutfit={regenerateTodayOutfit}
+                onChooseItem={chooseTodayOutfitItem}
+                onChangeItem={changeTodayOutfitItem}
+                onRemoveItem={removeTodayOutfitItem}
+                onMarkWorn={markTodayOutfitWorn}
                 allItems={items}
-                eventForecastStatus={eventForecastStatus}
-                onFindEventForecast={(surface) => applyEventForecast(request, surface ?? "today")}
               />
             ) : null}
             {view === "insights" ? (
@@ -1398,18 +1655,17 @@ function TodayView({
   activeWeather,
   onUpdateWeatherSettings,
   onRefreshWeather,
-  request,
-  setRequest,
-  onUpdateRequest,
-  outfit,
-  onGenerate,
-  onRegenerate,
+  outfits,
+  onAddOutfit,
+  onRemoveOutfit,
+  onUpdateOutfitRequest,
+  onGenerateOutfit,
+  onRegenerateOutfit,
   onChooseItem,
   onChangeItem,
   onRemoveItem,
-  allItems,
-  eventForecastStatus,
-  onFindEventForecast
+  onMarkWorn,
+  allItems
 }) {
   return (
     <section className="today-stack" {...componentMeta("TodayView")}>
@@ -1421,26 +1677,148 @@ function TodayView({
         onUpdateSettings={onUpdateWeatherSettings}
         onRefreshWeather={onRefreshWeather}
       />
-      <PlannerView
-        request={request}
-        setRequest={setRequest}
-        onUpdateRequest={onUpdateRequest}
-        outfit={outfit}
-        onGenerate={onGenerate}
-        onRegenerate={onRegenerate}
-        onChooseItem={onChooseItem}
-        onChangeItem={onChangeItem}
-        onRemoveItem={onRemoveItem}
+      <section className="today-outfits" {...componentMeta("TodayOutfits")}>
+        <div className="panel today-outfits-header">
+          <div className="panel-header compact">
+            <div>
+              <h1>Today</h1>
+              <span className="panel-subtitle">Weather is shared. Outfit choices are separate.</span>
+            </div>
+            <button className="primary-button" type="button" onClick={onAddOutfit}>
+              <Plus size={16} aria-hidden="true" />
+              Add outfit
+            </button>
+          </div>
+        </div>
+        {outfits.map((plan, index) => (
+          <TodayOutfitCard
+            key={plan.id}
+            plan={plan}
+            index={index}
+            canRemove={outfits.length > 1}
+            onRemoveOutfit={onRemoveOutfit}
+            onUpdateRequest={onUpdateOutfitRequest}
+            onGenerate={onGenerateOutfit}
+            onRegenerate={onRegenerateOutfit}
+            onChooseItem={onChooseItem}
+            onChangeItem={onChangeItem}
+            onRemoveItem={onRemoveItem}
+            onMarkWorn={onMarkWorn}
+            allItems={allItems}
+          />
+        ))}
+      </section>
+    </section>
+  );
+}
+
+function TodayOutfitCard({
+  plan,
+  index,
+  canRemove,
+  onRemoveOutfit,
+  onUpdateRequest,
+  onGenerate,
+  onRegenerate,
+  onChooseItem,
+  onChangeItem,
+  onRemoveItem,
+  onMarkWorn,
+  allItems
+}) {
+  const selectedItems = outfitEntries(plan.outfit?.selections);
+  const wornToday = plan.lastWornDate === todayIso();
+
+  return (
+    <section className="panel outfit-panel today-outfit-card" {...componentMeta("TodayOutfitCard")}>
+      <div className="panel-header">
+        <div>
+          <h1>{plan.label || `Outfit ${index + 1}`}</h1>
+          <span className="panel-subtitle">{plan.outfit?.summary ?? "Generate an outfit from ready items."}</span>
+        </div>
+        <div className="panel-actions">
+          <button className="secondary-button" type="button" onClick={() => onGenerate(plan.id)}>
+            <Wand2 size={16} aria-hidden="true" />
+            Generate
+          </button>
+          <button className="secondary-button" type="button" onClick={() => onRegenerate(plan.id)}>
+            <Shuffle size={16} aria-hidden="true" />
+            Regenerate
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={!selectedItems.length || wornToday}
+            onClick={() => onMarkWorn(plan.id)}
+          >
+            <Check size={16} aria-hidden="true" />
+            {wornToday ? "Worn today" : "Mark worn"}
+          </button>
+          {canRemove ? (
+            <button className="row-remove" type="button" aria-label={`Remove ${plan.label}`} onClick={() => onRemoveOutfit(plan.id)}>
+              <X size={15} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="today-outfit-controls planner-controls">
+        <Select
+          label="Category"
+          value={plan.request.outfitCategory}
+          onChange={(outfitCategory) => onUpdateRequest(plan.id, { outfitCategory })}
+          options={outfitCategories.map((category) => category.id)}
+        />
+        <Select
+          label="Plan for"
+          value={plan.request.exposure}
+          onChange={(exposure) => onUpdateRequest(plan.id, { exposure })}
+          options={exposureOptions}
+        />
+        <label>
+          Formality
+          <input
+            type="range"
+            min="1"
+            max="5"
+            value={plan.request.formality}
+            onChange={(event) => onUpdateRequest(plan.id, { formality: Number(event.target.value) })}
+          />
+        </label>
+        <label className="checkbox-line">
+          <input
+            type="checkbox"
+            checked={plan.request.underused}
+            onChange={(event) => onUpdateRequest(plan.id, { underused: event.target.checked })}
+          />
+          Prefer underused
+        </label>
+      </div>
+
+      <OutfitBoard
+        selections={plan.outfit?.selections ?? {}}
+        alternatives={plan.outfit?.alternatives ?? {}}
         allItems={allItems}
-        settings={settings}
-        weatherCache={weatherCache}
-        weatherStatus={weatherStatus}
-        onRefreshWeather={onRefreshWeather}
-        plannedEventLocation={settings.destinationEnabled ? "destination" : "home"}
+        onChooseItem={(slot, itemId, options) => onChooseItem(plan.id, slot, itemId, options)}
+        onChangeItem={(slot, itemIndex, itemId) => onChangeItem(plan.id, slot, itemIndex, itemId)}
+        onRemoveItem={(slot, itemId) => onRemoveItem(plan.id, slot, itemId)}
         surface="today"
-        eventForecastStatus={eventForecastStatus}
-        onFindEventForecast={() => onFindEventForecast?.("today")}
       />
+      <WeatherFitList entries={selectedItems} request={plan.request} />
+      <div className="evidence-list">
+        {(plan.outfit?.reasons ?? []).map((line) => (
+          <div key={line}>
+            <Check size={14} aria-hidden="true" />
+            <span>{line}</span>
+          </div>
+        ))}
+        {(plan.outfit?.missing ?? []).map((slot) => (
+          <div key={slot} className="warning-line">
+            <PackageSearch size={14} aria-hidden="true" />
+            <span>Add a ready {slot}</span>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }
@@ -2215,7 +2593,7 @@ function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, o
                 <input type="date" value={draft.acquired} onChange={(event) => setField("acquired", event.target.value)} />
               </label>
               <label>
-                Wears
+                Times worn
                 <input
                   type="number"
                   min="0"
@@ -2536,6 +2914,33 @@ function outfitEntries(selections) {
   return Object.entries(selections ?? {}).flatMap(([slot, value]) =>
     (Array.isArray(value) ? value : [value]).filter(Boolean).map((item, index) => [slot, item, index])
   );
+}
+
+function syncOutfitItems(outfit, nextItems) {
+  if (!outfit) return outfit;
+  const itemsById = new Map(nextItems.map((item) => [item.id, item]));
+  const syncSelection = (value) =>
+    (Array.isArray(value) ? value : [value])
+      .filter(Boolean)
+      .map((item) => itemsById.get(item.id))
+      .filter(Boolean);
+  const selections = Object.fromEntries(
+    Object.entries(outfit.selections ?? {})
+      .map(([slot, value]) => [slot, syncSelection(value)])
+      .filter(([, selected]) => selected.length)
+  );
+  const alternatives = Object.fromEntries(
+    Object.entries(outfit.alternatives ?? {}).map(([slot, alternativesForSlot]) => [
+      slot,
+      alternativesForSlot
+        .map((candidate) => {
+          const item = itemsById.get(candidate.item?.id);
+          return item ? { ...candidate, item } : null;
+        })
+        .filter(Boolean)
+    ])
+  );
+  return { ...outfit, selections, alternatives };
 }
 
 function PlannerWeatherCard({ label, entry, zip, active = false }) {
@@ -3187,6 +3592,7 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
         <fieldset>
           <legend>Ownership</legend>
           <NumberSelect label="Cost USD" value={form.cost} onChange={(value) => setField("cost", value)} options={costOptions} />
+          <NumberSelect label="Times worn" value={form.wears} onChange={(value) => setField("wears", value)} options={wearCountOptions} />
           <label>
             Acquired
             <input type="date" value={form.acquired} onChange={(event) => setField("acquired", event.target.value)} />
