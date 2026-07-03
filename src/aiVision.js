@@ -367,9 +367,16 @@ function splitDataUrl(dataUrl) {
   return { mimeType: match[1], base64: match[2] };
 }
 
-async function dataUrlToBlob(dataUrl) {
-  const response = await fetch(dataUrl);
-  return response.blob();
+function dataUrlToBlob(dataUrl) {
+  const { mimeType, base64 } = splitDataUrl(dataUrl);
+  const decodeBase64 = globalThis.atob;
+  if (typeof decodeBase64 !== "function") throw new Error("Photo data cannot be decoded in this browser.");
+  const binary = decodeBase64(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: mimeType });
 }
 
 function extensionFromMime(mimeType) {
