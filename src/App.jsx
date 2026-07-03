@@ -30,7 +30,7 @@ import {
   Wind,
   X
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   categoryOptions,
   climateOptions,
@@ -147,7 +147,8 @@ const newItemTemplate = {
   care: "",
   storageLocation: "",
   notes: "",
-  imageDataUrl: ""
+  imageDataUrl: "",
+  evidencePhotos: []
 };
 
 const starterItemIds = new Set(starterItems.map((item) => item.id));
@@ -220,6 +221,20 @@ const layerRoleOptions = [
   "accessory"
 ];
 
+const patternOptions = ["solid", "stripe", "plaid", "check", "houndstooth", "floral", "graphic", "textured", "colorblock"];
+
+const itemStatusOptions = ["active", "archived"];
+
+const evidencePhotoRoles = [
+  { value: "front", label: "Front" },
+  { value: "back", label: "Back" },
+  { value: "brand_label", label: "Brand label" },
+  { value: "care_label", label: "Care label" },
+  { value: "size_tag", label: "Size tag" },
+  { value: "detail", label: "Detail" },
+  { value: "packaging", label: "Packaging" }
+];
+
 const materialPctOptions = [100, 98, 95, 92, 90, 88, 85, 80, 75, 70, 65, 60, 55, 50, 0].map((value) => ({
   value,
   label: `${value}%`
@@ -258,6 +273,8 @@ const friendlyLabels = {
   socks: "Socks",
   sleepwear: "Sleepwear",
   swimwear: "Swimwear",
+  active: "Active",
+  archived: "Archived",
   ready: "Ready",
   worn: "Worn",
   dirty: "Dirty",
@@ -292,7 +309,8 @@ function freshItemTemplate() {
     ...newItemTemplate,
     outfitTags: [...newItemTemplate.outfitTags],
     season: [...newItemTemplate.season],
-    climate: [...newItemTemplate.climate]
+    climate: [...newItemTemplate.climate],
+    evidencePhotos: []
   };
 }
 
@@ -319,6 +337,18 @@ function makeId(prefix) {
     globalThis.crypto?.randomUUID?.() ??
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   return `${prefix}-${randomId}`;
+}
+
+function normalizeEvidencePhotos(photos) {
+  if (!Array.isArray(photos)) return [];
+  return photos
+    .filter((photo) => photo?.dataUrl)
+    .map((photo) => ({
+      id: photo.id ?? makeId("photo"),
+      role: photo.role || "detail",
+      dataUrl: photo.dataUrl,
+      capturedAt: photo.capturedAt || ""
+    }));
 }
 
 function parseDate(dateText) {
@@ -364,7 +394,8 @@ function normalizeItem(form) {
     laundry: form.laundry || "ready",
     outfitTags: form.outfitTags?.length ? form.outfitTags : ["daily"],
     season: form.season?.length ? form.season : ["spring", "fall"],
-    climate: form.climate?.length ? form.climate : ["mild"]
+    climate: form.climate?.length ? form.climate : ["mild"],
+    evidencePhotos: normalizeEvidencePhotos(form.evidencePhotos)
   };
 }
 
@@ -838,8 +869,8 @@ function App() {
     }
   }
 
-  async function enrichInventoryItem(itemId) {
-    const item = items.find((candidate) => candidate.id === itemId);
+  async function enrichInventoryItem(itemId, baseItem = null) {
+    const item = baseItem ? normalizeItem(baseItem) : items.find((candidate) => candidate.id === itemId);
     if (!item) return;
 
     if (!item.imageDataUrl) {
@@ -858,9 +889,10 @@ function App() {
     setInventoryAiStatus({ itemId, state: "loading", message: "Reading photo", draft: null });
     try {
       const draft = await enrichItemFromImage({ config: settings.aiVision, imageDataUrl: item.imageDataUrl, item });
+      const enrichedItem = normalizeItem(mergeAiDraftIntoItem(item, draft, newItemTemplate));
       setItems((current) =>
         current.map((candidate) =>
-          candidate.id === itemId ? normalizeItem(mergeAiDraftIntoItem(candidate, draft, newItemTemplate)) : candidate
+          candidate.id === itemId ? enrichedItem : candidate
         )
       );
       setInventoryAiStatus({
@@ -875,6 +907,30 @@ function App() {
       setInventoryAiStatus({ itemId, state: "error", message, draft: null });
       showToast(message);
     }
+  }
+
+  function saveInventoryItem(updatedItem) {
+    const normalized = normalizeItem(updatedItem);
+    setItems((current) => current.map((candidate) => (candidate.id === normalized.id ? normalized : candidate)));
+    setGeneratedOutfit((current) => {
+      if (!current) return current;
+      const nextSelections = Object.fromEntries(
+        Object.entries(current.selections ?? {}).map(([slot, selected]) => [
+          slot,
+          selectionItems({ [slot]: selected }, slot).map((item) => (item.id === normalized.id ? normalized : item))
+        ])
+      );
+      const nextAlternatives = Object.fromEntries(
+        Object.entries(current.alternatives ?? {}).map(([slot, alternatives]) => [
+          slot,
+          alternatives.map((candidate) =>
+            candidate.item?.id === normalized.id ? { ...candidate, item: normalized } : candidate
+          )
+        ])
+      );
+      return { ...current, selections: nextSelections, alternatives: nextAlternatives };
+    });
+    showToast("Item saved");
   }
 
   async function refreshWeather(kind, zip, options = {}) {
@@ -1158,6 +1214,7 @@ function App() {
                 aiStatus={inventoryAiStatus}
                 onEnrichItem={enrichInventoryItem}
                 onOpenSettings={() => setView("settings")}
+                onSaveItem={saveInventoryItem}
               />
             ) : null}
             {view === "planner" ? (
@@ -1801,15 +1858,6 @@ function ItemMiniList({ items, suffix }) {
   );
 }
 
-function DetailField({ label, value }) {
-  return (
-    <div>
-      <span>{label}</span>
-      <strong>{value || "n/a"}</strong>
-    </div>
-  );
-}
-
 function AiEnrichmentPanel({
   configStatus,
   configured,
@@ -1874,81 +1922,367 @@ function AiEvidencePanel({ draft }) {
   );
 }
 
-function ItemDetailPanel({ item, aiVision, aiStatus, onEnrich, onOpenSettings, onClose }) {
+function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, onSave, onClose }) {
+  const [draft, setDraft] = useState(() => normalizeItem(item));
   const configStatus = aiVisionConfigStatus(aiVision);
-  const details = [
-    ["Category", labelFor(item.category)],
-    ["Subcategory", item.subcategory],
-    ["Brand", item.brand || "Unbranded"],
-    ["Size", item.size],
-    ["Color", item.color],
-    ["Material", item.material],
-    ["Fabric", item.fabric],
-    ["Pattern", item.pattern],
-    ["Warmth", `${item.warmth}/5`],
-    ["Breathability", `${item.breathability}/5`],
-    ["Rain", `${item.rain}/5`],
-    ["Wind", `${item.wind}/5`],
-    ["Formality", `${item.formality}/5`],
-    ["Condition", `${item.condition}/5`],
-    ["Laundry", labelFor(item.laundry)],
-    ["Status", labelFor(item.status)],
-    ["Wears", item.wears || 0],
-    ["Last worn", item.lastWorn || "never"],
-    ["Acquired", item.acquired],
-    ["Cost", money(item.cost)],
-    ["Cost/wear", costPerWear(item)],
-    ["Storage", item.storageLocation],
-    ["Care", item.care]
-  ];
+  const titleId = `item-modal-title-${item.id}`;
+
+  useEffect(() => {
+    setDraft(normalizeItem(item));
+  }, [item]);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
+
+  function setField(field, value) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function toggleOutfitTag(tag) {
+    setDraft((current) => {
+      const tags = current.outfitTags ?? [];
+      return {
+        ...current,
+        outfitTags: tags.includes(tag) ? tags.filter((itemTag) => itemTag !== tag) : [...tags, tag]
+      };
+    });
+  }
+
+  function readImageFile(file, onReady) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => onReady(String(reader.result));
+    reader.readAsDataURL(file);
+  }
+
+  function updatePrimaryPhoto(file) {
+    readImageFile(file, (dataUrl) => setField("imageDataUrl", dataUrl));
+  }
+
+  function addEvidencePhotos(fileList) {
+    Array.from(fileList ?? []).forEach((file) => {
+      readImageFile(file, (dataUrl) => {
+        setDraft((current) => ({
+          ...current,
+          evidencePhotos: [
+            ...(current.evidencePhotos ?? []),
+            {
+              id: makeId("photo"),
+              role: "detail",
+              dataUrl,
+              capturedAt: new Date().toISOString()
+            }
+          ]
+        }));
+      });
+    });
+  }
+
+  function updateEvidencePhoto(photoId, patch) {
+    setDraft((current) => ({
+      ...current,
+      evidencePhotos: (current.evidencePhotos ?? []).map((photo) =>
+        photo.id === photoId ? { ...photo, ...patch } : photo
+      )
+    }));
+  }
+
+  function removeEvidencePhoto(photoId) {
+    setDraft((current) => ({
+      ...current,
+      evidencePhotos: (current.evidencePhotos ?? []).filter((photo) => photo.id !== photoId)
+    }));
+  }
+
+  function handleSubmit(event) {
+    event.preventDefault();
+    onSave(draft);
+    onClose();
+  }
+
+  function handleEnrich() {
+    const normalized = normalizeItem(draft);
+    onSave(normalized);
+    onEnrich(normalized);
+  }
 
   return (
-    <div className="item-detail-panel">
-      <div className="item-detail-header">
-        <ItemVisual item={item} size="md" />
-        <div>
-          <h2>{item.name}</h2>
-          <span>{item.brand || "Unbranded"} · {item.color || "Color n/a"}</span>
-        </div>
-        <button className="secondary-button" type="button" onClick={onClose}>
-          <X size={15} aria-hidden="true" />
-          Close
-        </button>
-      </div>
-      <AiEnrichmentPanel
-        compact
-        configStatus={configStatus}
-        hasImage={Boolean(item.imageDataUrl)}
-        status={aiStatus}
-        onEnrich={onEnrich}
-        onOpenSettings={onOpenSettings}
-        summary="Uses this item's photo to fill blank fields."
-      />
-      <AiEvidencePanel draft={aiStatus?.draft} />
-      <div className="item-detail-grid">
-        {details.map(([label, value]) => (
-          <DetailField key={label} label={label} value={value} />
-        ))}
-      </div>
-      <div className="item-detail-tags">
-        <div>
-          <span>Seasons</span>
-          <strong>{(item.season ?? []).map(labelFor).join(", ") || "n/a"}</strong>
-        </div>
-        <div>
-          <span>Weather</span>
-          <WeatherProfilePills item={item} />
-        </div>
-        <div>
-          <span>Outfits</span>
-          <strong>{(item.outfitTags ?? []).map(labelFor).join(", ") || "n/a"}</strong>
-        </div>
-      </div>
-      {item.notes ? <p>{item.notes}</p> : null}
+    <div
+      className="modal-backdrop item-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="item-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <form className="item-modal-form" onSubmit={handleSubmit}>
+          <div className="item-modal-header">
+            <div className="item-modal-title">
+              <ItemVisual item={draft} size="md" />
+              <div>
+                <h1 id={titleId}>{draft.name || "Edit item"}</h1>
+                <span>{draft.brand || "Unbranded"} · {draft.color || "Color n/a"} · {costPerWear(draft)}</span>
+              </div>
+            </div>
+            <button className="row-remove" type="button" aria-label="Close item editor" onClick={onClose}>
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="item-modal-body">
+            <section className="item-photo-editor" aria-label="Item photos">
+              <div className="item-primary-photo">
+                {draft.imageDataUrl ? (
+                  <img src={draft.imageDataUrl} alt={draft.name ? `${draft.name} primary` : "Selected item"} />
+                ) : (
+                  <Camera size={34} aria-hidden="true" />
+                )}
+              </div>
+              <div className="item-photo-actions">
+                <strong>Primary photo</strong>
+                <div>
+                  <label className="secondary-button">
+                    <ImagePlus size={16} aria-hidden="true" />
+                    Replace
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={(event) => {
+                        updatePrimaryPhoto(event.target.files?.[0]);
+                        event.target.value = "";
+                      }}
+                      hidden
+                    />
+                  </label>
+                  {draft.imageDataUrl ? (
+                    <button className="secondary-button" type="button" onClick={() => setField("imageDataUrl", "")}>
+                      Remove
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="evidence-photo-section">
+                <div className="item-modal-section-header">
+                  <strong>Extra images</strong>
+                  <label className="secondary-button">
+                    <ImagePlus size={16} aria-hidden="true" />
+                    Add image
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      multiple
+                      onChange={(event) => {
+                        addEvidencePhotos(event.target.files);
+                        event.target.value = "";
+                      }}
+                      hidden
+                    />
+                  </label>
+                </div>
+                {draft.evidencePhotos?.length ? (
+                  <div className="evidence-photo-grid">
+                    {draft.evidencePhotos.map((photo) => (
+                      <div className="evidence-photo-card" key={photo.id}>
+                        <img className="evidence-photo-thumb" src={photo.dataUrl} alt="" />
+                        <label>
+                          Type
+                          <select
+                            value={photo.role}
+                            onChange={(event) => updateEvidencePhoto(photo.id, { role: event.target.value })}
+                          >
+                            {evidencePhotoRoles.map((role) => (
+                              <option key={role.value} value={role.value}>
+                                {role.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="evidence-photo-actions">
+                          <button
+                            className="slot-action-button"
+                            type="button"
+                            onClick={() => setField("imageDataUrl", photo.dataUrl)}
+                          >
+                            Make primary
+                          </button>
+                          <button
+                            className="row-remove"
+                            type="button"
+                            aria-label="Remove extra image"
+                            onClick={() => removeEvidencePhoto(photo.id)}
+                          >
+                            <Trash2 size={14} aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted compact-text">No extra images.</p>
+                )}
+              </div>
+            </section>
+
+            <AiEnrichmentPanel
+              compact
+              configStatus={configStatus}
+              hasImage={Boolean(draft.imageDataUrl)}
+              status={aiStatus}
+              onEnrich={handleEnrich}
+              onOpenSettings={onOpenSettings}
+              summary="Saves current edits, then drafts metadata from the primary photo."
+            />
+            <AiEvidencePanel draft={aiStatus?.draft} />
+
+            <div className="form-profile" {...componentMeta("ItemWeatherProfile")}>
+              <strong>Weather profile</strong>
+              <WeatherProfilePills item={draft} />
+            </div>
+
+            <fieldset>
+              <legend>Identity</legend>
+              <label>
+                Name
+                <input required value={draft.name} onChange={(event) => setField("name", event.target.value)} />
+              </label>
+              <Select label="Category" value={draft.category} onChange={(value) => setField("category", value)} options={categoryOptions} />
+              <label>
+                Subcategory
+                <input value={draft.subcategory} onChange={(event) => setField("subcategory", event.target.value)} />
+              </label>
+              <label>
+                Brand
+                <input value={draft.brand} onChange={(event) => setField("brand", event.target.value)} />
+              </label>
+              <label>
+                Size
+                <input value={draft.size} onChange={(event) => setField("size", event.target.value)} />
+              </label>
+              <label>
+                Color
+                <input value={draft.color} onChange={(event) => setField("color", event.target.value)} />
+              </label>
+              <label>
+                Swatch
+                <input
+                  type="color"
+                  value={draft.swatch.startsWith("#") ? draft.swatch : "#176b73"}
+                  onChange={(event) => setField("swatch", event.target.value)}
+                />
+              </label>
+              <SelectWithCustom label="Pattern" value={draft.pattern} onChange={(value) => setField("pattern", value)} options={patternOptions} />
+            </fieldset>
+
+            <fieldset>
+              <legend>Fabric and performance</legend>
+              <SelectWithCustom label="Material" value={draft.material} onChange={(value) => setField("material", value)} options={materialOptions} />
+              <NumberSelect label="Material %" value={draft.materialPct} onChange={(value) => setField("materialPct", value)} options={materialPctOptions} />
+              <SelectWithCustom label="Fabric" value={draft.fabric} onChange={(value) => setField("fabric", value)} options={fabricOptions} />
+              <SelectWithCustom label="Layer role" value={draft.layerRole} onChange={(value) => setField("layerRole", value)} options={layerRoleOptions} />
+              <NumberSelect label="Warmth" value={draft.warmth} onChange={(value) => setField("warmth", value)} options={ratingOptions} />
+              <NumberSelect label="Breathability" value={draft.breathability} onChange={(value) => setField("breathability", value)} options={ratingOptions} />
+              <NumberSelect label="Rain" value={draft.rain} onChange={(value) => setField("rain", value)} options={ratingOptions} />
+              <NumberSelect label="Wind" value={draft.wind} onChange={(value) => setField("wind", value)} options={ratingOptions} />
+              <NumberSelect label="Formality" value={draft.formality} onChange={(value) => setField("formality", value)} options={oneToFiveOptions} />
+              <NumberSelect label="Condition" value={draft.condition} onChange={(value) => setField("condition", value)} options={oneToFiveOptions} />
+            </fieldset>
+
+            <fieldset>
+              <legend>Ownership</legend>
+              <NumberSelect label="Cost USD" value={draft.cost} onChange={(value) => setField("cost", value)} options={costOptions} />
+              <label>
+                Acquired
+                <input type="date" value={draft.acquired} onChange={(event) => setField("acquired", event.target.value)} />
+              </label>
+              <label>
+                Wears
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={draft.wears}
+                  onChange={(event) => setField("wears", Number(event.target.value || 0))}
+                />
+              </label>
+              <label>
+                Last worn
+                <input type="date" value={draft.lastWorn} onChange={(event) => setField("lastWorn", event.target.value)} />
+              </label>
+              <Select label="Laundry" value={draft.laundry} onChange={(value) => setField("laundry", value)} options={laundryOptions} />
+              <Select label="Status" value={draft.status} onChange={(value) => setField("status", value)} options={itemStatusOptions} />
+              <label>
+                Location
+                <input value={draft.storageLocation} onChange={(event) => setField("storageLocation", event.target.value)} />
+              </label>
+              <label>
+                Care
+                <input value={draft.care} onChange={(event) => setField("care", event.target.value)} />
+              </label>
+              <label className="notes-field">
+                Notes
+                <textarea value={draft.notes} onChange={(event) => setField("notes", event.target.value)} />
+              </label>
+            </fieldset>
+
+            <fieldset className="tag-fieldset">
+              <legend>Seasons</legend>
+              <ToggleGroup options={seasonOptions} values={draft.season ?? []} onChange={(value) => setField("season", value)} />
+            </fieldset>
+
+            <fieldset className="tag-fieldset">
+              <legend>Weather</legend>
+              <ToggleGroup options={climateOptions} values={draft.climate ?? []} onChange={(value) => setField("climate", value)} />
+            </fieldset>
+
+            <fieldset className="tag-fieldset">
+              <legend>Outfits</legend>
+              <div className="toggle-grid">
+                {outfitCategories.map((category) => (
+                  <label key={category.id} className="checkbox-line">
+                    <input
+                      checked={(draft.outfitTags ?? []).includes(category.id)}
+                      type="checkbox"
+                      onChange={() => toggleOutfitTag(category.id)}
+                    />
+                    {category.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </div>
+
+          <div className="item-modal-footer">
+            <button className="secondary-button" type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="primary-button" type="submit">
+              <Check size={16} aria-hidden="true" />
+              Save item
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   );
 }
-
 function InventoryView({
   items,
   allItems,
@@ -1962,9 +2296,11 @@ function InventoryView({
   aiVision,
   aiStatus,
   onEnrichItem,
-  onOpenSettings
+  onOpenSettings,
+  onSaveItem
 }) {
   const [selectedItemId, setSelectedItemId] = useState("");
+  const selectedItem = allItems.find((candidate) => candidate.id === selectedItemId);
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -2083,77 +2419,61 @@ function InventoryView({
             {items.map((item) => {
               const profile = inferWeatherProfile(item);
               const selected = selectedItemId === item.id;
-              const itemAiStatus = aiStatus?.itemId === item.id ? aiStatus : emptyAiStatus;
               return (
-                <Fragment key={item.id}>
-                  <tr
-                    className={selected ? "inventory-row selected" : "inventory-row"}
-                    tabIndex="0"
-                    onClick={() => setSelectedItemId((current) => (current === item.id ? "" : item.id))}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setSelectedItemId((current) => (current === item.id ? "" : item.id));
-                      }
-                    }}
-                  >
-                    <td>
-                      <div className="item-name-cell">
-                        <ItemVisual item={item} size="sm" />
-                        <div>
-                          <strong>{item.name}</strong>
-                          <span>{item.brand || "Unbranded"} · {item.color || "Color n/a"}</span>
-                        </div>
+                <tr
+                  className={selected ? "inventory-row selected" : "inventory-row"}
+                  key={item.id}
+                  tabIndex="0"
+                  onClick={() => setSelectedItemId((current) => (current === item.id ? "" : item.id))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedItemId((current) => (current === item.id ? "" : item.id));
+                    }
+                  }}
+                >
+                  <td>
+                    <div className="item-name-cell">
+                      <ItemVisual item={item} size="sm" />
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>{item.brand || "Unbranded"} · {item.color || "Color n/a"}</span>
                       </div>
-                    </td>
-                    <td>{brandLabel(item.brand)}</td>
-                    <td>{labelFor(item.category)}</td>
-                    <td>{item.size || "n/a"}</td>
-                    <td>{item.material || "n/a"}</td>
-                    <td>
-                      <div className="compact-chip-row">
-                        {profile.labels.slice(0, 2).map((label) => (
-                          <StatusChip key={label} tone="info">{label}</StatusChip>
-                        ))}
-                      </div>
-                    </td>
-                    <td>{(item.season ?? []).map(labelFor).join(", ") || "n/a"}</td>
-                    <td>{item.formality}/5</td>
-                    <td>{item.wears || 0}</td>
-                    <td>{costPerWear(item)}</td>
-                    <td>{item.lastWorn || "never"}</td>
-                    <td>
-                      <StatusChip tone={item.laundry === "ready" ? "success" : "warning"}>{labelFor(item.laundry)}</StatusChip>
-                    </td>
-                    <td className="remove-cell">
-                      <button
-                        className="row-remove"
-                        type="button"
-                        aria-label={`Remove ${item.name}`}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onRemove(item.id);
-                        }}
-                      >
-                        <Trash2 size={15} aria-hidden="true" />
-                      </button>
-                    </td>
-                  </tr>
-                  {selected ? (
-                    <tr className="item-detail-row">
-                      <td colSpan={headers.length + 1}>
-                        <ItemDetailPanel
-                          item={item}
-                          aiVision={aiVision}
-                          aiStatus={itemAiStatus}
-                          onEnrich={() => onEnrichItem(item.id)}
-                          onOpenSettings={onOpenSettings}
-                          onClose={() => setSelectedItemId("")}
-                        />
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
+                    </div>
+                  </td>
+                  <td>{brandLabel(item.brand)}</td>
+                  <td>{labelFor(item.category)}</td>
+                  <td>{item.size || "n/a"}</td>
+                  <td>{item.material || "n/a"}</td>
+                  <td>
+                    <div className="compact-chip-row">
+                      {profile.labels.slice(0, 2).map((label) => (
+                        <StatusChip key={label} tone="info">{label}</StatusChip>
+                      ))}
+                    </div>
+                  </td>
+                  <td>{(item.season ?? []).map(labelFor).join(", ") || "n/a"}</td>
+                  <td>{item.formality}/5</td>
+                  <td>{item.wears || 0}</td>
+                  <td>{costPerWear(item)}</td>
+                  <td>{item.lastWorn || "never"}</td>
+                  <td>
+                    <StatusChip tone={item.laundry === "ready" ? "success" : "warning"}>{labelFor(item.laundry)}</StatusChip>
+                  </td>
+                  <td className="remove-cell">
+                    <button
+                      className="row-remove"
+                      type="button"
+                      aria-label={`Remove ${item.name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRemove(item.id);
+                      }}
+                    >
+                      <Trash2 size={15} aria-hidden="true" />
+                    </button>
+                  </td>
+                </tr>
               );
             })}
             {!items.length ? (
@@ -2166,6 +2486,17 @@ function InventoryView({
           </tbody>
         </table>
       </div>
+      {selectedItem ? (
+        <ItemDetailModal
+          item={selectedItem}
+          aiVision={aiVision}
+          aiStatus={aiStatus?.itemId === selectedItem.id ? aiStatus : emptyAiStatus}
+          onEnrich={(draftItem) => onEnrichItem(selectedItem.id, draftItem)}
+          onOpenSettings={onOpenSettings}
+          onSave={onSaveItem}
+          onClose={() => setSelectedItemId("")}
+        />
+      ) : null}
     </section>
   );
 }
@@ -2460,11 +2791,23 @@ function PlannerView({
 }
 
 function NumberSelect({ label, value, onChange, options }) {
+  const hasCurrentValue = options.some((option) => Number(optionValue(option)) === Number(value));
+  const displayedOptions =
+    hasCurrentValue || value === "" || value === null || value === undefined
+      ? options
+      : [
+          {
+            value,
+            label: label.toLowerCase().includes("cost") ? money(value) : String(value)
+          },
+          ...options
+        ];
+
   return (
     <label>
       {label}
       <select value={value} onChange={(event) => onChange(Number(event.target.value))}>
-        {options.map((option) => (
+        {displayedOptions.map((option) => (
           <option key={optionValue(option)} value={optionValue(option)}>
             {labelFor(option)}
           </option>
@@ -2825,10 +3168,7 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
               onChange={(event) => setField("swatch", event.target.value)}
             />
           </label>
-          <label>
-            Pattern
-            <input value={form.pattern} onChange={(event) => setField("pattern", event.target.value)} />
-          </label>
+          <SelectWithCustom label="Pattern" value={form.pattern} onChange={(value) => setField("pattern", value)} options={patternOptions} />
         </fieldset>
 
         <fieldset>
