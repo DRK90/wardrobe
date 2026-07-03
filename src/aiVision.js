@@ -220,7 +220,6 @@ export function mergeAiDraftIntoItem(item, draft, template) {
 }
 
 async function callWardrobeVisionApi(config, imageDataUrl, item) {
-  const endpoint = visionEndpointUrl(config.endpoint, "/v1/vision/observe");
   const blob = await dataUrlToBlob(imageDataUrl);
   const formData = new FormData();
   formData.append("file", blob, `wardrobe-${Date.now()}.${extensionFromMime(blob.type)}`);
@@ -231,7 +230,7 @@ async function callWardrobeVisionApi(config, imageDataUrl, item) {
   const apiKey = String(config.apiKey ?? "").trim();
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-  const response = await fetch(endpoint, { method: "POST", headers, body: formData });
+  const response = await fetch(config.endpoint, { method: "POST", headers, body: formData });
   return readJsonResponse(response);
 }
 
@@ -338,13 +337,6 @@ async function readJsonResponse(response) {
     throw new Error(message);
   }
   return payload;
-}
-
-function visionEndpointUrl(endpoint, defaultPath) {
-  const value = endpoint.trim().replace(/\/+$/, "");
-  if (!value) return "";
-  if (value.endsWith(defaultPath)) return value;
-  return `${value}${defaultPath}`;
 }
 
 function splitDataUrl(dataUrl) {

@@ -3023,14 +3023,14 @@ function SettingsView({
               className={missingAiFields.has("API endpoint") ? "field-missing" : ""}
               value={aiVision.endpoint}
               onChange={(event) => onUpdateAiVisionSettings({ endpoint: event.target.value })}
-              placeholder={aiVision.provider === "wardrobe" ? "http://host:8114" : "Provider endpoint"}
+              placeholder={aiVision.provider === "wardrobe" ? "https://host/path" : "Provider endpoint"}
               disabled={aiVision.provider === "off"}
               required={aiVision.provider !== "off"}
               aria-invalid={missingAiFields.has("API endpoint")}
               inputMode="url"
             />
             <span className="field-help">
-              {aiVision.provider === "wardrobe" ? "Base URL only. The app adds /v1/vision/observe." : "Provider API URL."}
+              {aiVision.provider === "wardrobe" ? "Full POST URL for the image enrichment endpoint." : "Provider API URL."}
             </span>
           </label>
           <label>
