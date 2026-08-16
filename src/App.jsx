@@ -30,7 +30,7 @@ import {
   Wind,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   categoryOptions,
   climateOptions,
@@ -60,16 +60,6 @@ import {
   validZip,
   weatherToRequest
 } from "./weather.js";
-import {
-  aiVisionConfigStatus,
-  aiVisionDefaultsForProvider,
-  aiVisionProviderOptions,
-  defaultAiVisionSettings,
-  enrichItemFromImage,
-  isAiVisionConfigured,
-  mergeAiDraftIntoItem,
-  normalizeAiVisionSettings
-} from "./aiVision.js";
 
 const defaultSettings = {
   id: "main",
@@ -78,8 +68,7 @@ const defaultSettings = {
   removedStarterIds: [],
   homeZip: "",
   destinationEnabled: false,
-  destinationZip: "",
-  aiVision: defaultAiVisionSettings
+  destinationZip: ""
 };
 
 const emptyWeatherCache = {
@@ -108,8 +97,7 @@ function normalizeSettings(settings) {
     destinationZip: settings?.destinationZip ?? defaultSettings.destinationZip,
     removedStarterIds: settings?.removedStarterIds,
     weatherProvider: settings?.weatherProvider ?? defaultSettings.weatherProvider,
-    units: settings?.units ?? defaultSettings.units,
-    aiVision: normalizeAiVisionSettings(settings?.aiVision)
+    units: settings?.units ?? defaultSettings.units
   };
   if (!Array.isArray(next.removedStarterIds)) next.removedStarterIds = [];
   next.homeZip = cleanZip(next.homeZip);
@@ -166,9 +154,6 @@ const filterDefaults = {
   size: "",
   material: ""
 };
-
-const emptyAiStatus = { state: "idle", message: "", draft: null };
-const emptyInventoryAiStatus = { itemId: "", state: "idle", message: "", draft: null };
 
 const materialOptions = [
   "Cotton",
@@ -657,8 +642,6 @@ function App() {
   const [generatedOutfit, setGeneratedOutfit] = useState(null);
   const [outfitOverrides, setOutfitOverrides] = useState({});
   const [form, setForm] = useState(() => freshItemTemplate());
-  const [aiEnrichmentStatus, setAiEnrichmentStatus] = useState(emptyAiStatus);
-  const [inventoryAiStatus, setInventoryAiStatus] = useState(emptyInventoryAiStatus);
   const [toast, setToast] = useState("");
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
@@ -747,10 +730,6 @@ function App() {
     if (!loaded) return;
     setEventForecastStatus({ state: "idle", message: "" });
   }, [loaded, request.eventDate, request.eventTime, request.eventLocation]);
-
-  useEffect(() => {
-    setAiEnrichmentStatus({ state: "idle", message: "", draft: null });
-  }, [form.imageDataUrl]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -900,85 +879,6 @@ function App() {
     );
   }
 
-  function updateAiVisionSettings(patch) {
-    setSettings((current) =>
-      normalizeSettings({
-        ...current,
-        aiVision: normalizeAiVisionSettings({
-          ...(current.aiVision ?? defaultAiVisionSettings),
-          ...patch
-        })
-      })
-    );
-  }
-
-  async function enrichCaptureForm() {
-    if (!form.imageDataUrl) {
-      showToast("Add a photo first");
-      return;
-    }
-    if (!isAiVisionConfigured(settings.aiVision)) {
-      showToast("Configure AI enrichment");
-      return;
-    }
-
-    setAiEnrichmentStatus({ state: "loading", message: "Reading photo", draft: null });
-    try {
-      const draft = await enrichItemFromImage({ config: settings.aiVision, imageDataUrl: form.imageDataUrl, item: form });
-      setForm((current) => mergeAiDraftIntoItem(current, draft, newItemTemplate));
-      setAiEnrichmentStatus({
-        state: "ready",
-        message: draft.confidence ? `${Math.round(draft.confidence * 100)}% confidence` : "Draft applied",
-        draft
-      });
-      showToast("AI draft applied");
-    } catch (error) {
-      const message = error.message || "AI enrichment failed";
-      setAiEnrichmentStatus({ state: "error", message, draft: null });
-      showToast(message);
-    }
-  }
-
-  async function enrichInventoryItem(itemId, baseItem = null) {
-    const item = baseItem ? normalizeItem(baseItem) : items.find((candidate) => candidate.id === itemId);
-    if (!item) return;
-
-    if (!item.imageDataUrl) {
-      const message = "Add a photo first";
-      setInventoryAiStatus({ itemId, state: "error", message, draft: null });
-      showToast(message);
-      return;
-    }
-    if (!isAiVisionConfigured(settings.aiVision)) {
-      const message = "Configure AI enrichment";
-      setInventoryAiStatus({ itemId, state: "error", message, draft: null });
-      showToast(message);
-      return;
-    }
-
-    setInventoryAiStatus({ itemId, state: "loading", message: "Reading photo", draft: null });
-    try {
-      const draft = await enrichItemFromImage({ config: settings.aiVision, imageDataUrl: item.imageDataUrl, item });
-      const enrichedItem = normalizeItem(mergeAiDraftIntoItem(item, draft, newItemTemplate));
-      setItems((current) =>
-        current.map((candidate) =>
-          candidate.id === itemId ? enrichedItem : candidate
-        )
-      );
-      setInventoryAiStatus({
-        itemId,
-        state: "ready",
-        message: draft.confidence ? `${Math.round(draft.confidence * 100)}% confidence` : "Draft applied",
-        draft
-      });
-      showToast("AI draft applied");
-    } catch (error) {
-      const message = error.message || "AI enrichment failed";
-      setInventoryAiStatus({ itemId, state: "error", message, draft: null });
-      showToast(message);
-    }
-  }
-
   function saveInventoryItem(updatedItem) {
     const normalized = normalizeItem(updatedItem);
     const nextItems = items.map((candidate) => (candidate.id === normalized.id ? normalized : candidate));
@@ -1076,7 +976,6 @@ function App() {
         removedStarterIds: [...new Set([...(current.removedStarterIds ?? []), id])]
       }));
     }
-    setInventoryAiStatus((current) => (current.itemId === id ? emptyInventoryAiStatus : current));
     const nextItems = items.filter((candidate) => candidate.id !== id);
     setItems(nextItems);
     setGeneratedOutfit((current) => syncOutfitItems(current, nextItems));
@@ -1378,20 +1277,20 @@ function App() {
     const item = normalizeItem(form);
     setItems((current) => [item, ...current]);
     setForm(freshItemTemplate());
-    setAiEnrichmentStatus(emptyAiStatus);
     setView("inventory");
     showToast("Item saved");
   }
 
   function exportData() {
-    const exportAiVision = normalizeAiVisionSettings(settings.aiVision);
-    delete exportAiVision.apiKey;
+    const exportSettings = { ...settings };
+    delete exportSettings.aiVision;
+    delete exportSettings.aiApiKey;
     const payload = {
       exportedAt: new Date().toISOString(),
       version: 4,
       items,
       wearLogs,
-      settings: { ...settings, aiApiKey: undefined, aiVision: exportAiVision },
+      settings: exportSettings,
       weatherCache
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -1473,10 +1372,6 @@ function App() {
                 sort={sort}
                 setSort={setSort}
                 onRemove={removeItem}
-                aiVision={settings.aiVision}
-                aiStatus={inventoryAiStatus}
-                onEnrichItem={enrichInventoryItem}
-                onOpenSettings={() => setView("settings")}
                 onSaveItem={saveInventoryItem}
               />
             ) : null}
@@ -1506,11 +1401,6 @@ function App() {
                 form={form}
                 setForm={setForm}
                 onSubmit={saveNewItem}
-                aiVision={settings.aiVision}
-                aiStatus={aiEnrichmentStatus}
-                onEnrich={enrichCaptureForm}
-                onOpenSettings={() => setView("settings")}
-                onResetAiStatus={() => setAiEnrichmentStatus(emptyAiStatus)}
               />
             ) : null}
             {view === "settings" ? (
@@ -1523,7 +1413,6 @@ function App() {
                 importRef={importRef}
                 onImport={importData}
                 onUpdateWeatherSettings={updateWeatherSettings}
-                onUpdateAiVisionSettings={updateAiVisionSettings}
                 onRemoveStarterWardrobe={removeStarterWardrobe}
                 starterItemCount={items.filter((item) => starterItemIds.has(item.id)).length}
               />
@@ -2252,70 +2141,6 @@ function ItemMiniList({ items, suffix }) {
   );
 }
 
-function AiEnrichmentPanel({
-  configStatus,
-  configured,
-  hasImage,
-  status,
-  onEnrich,
-  onOpenSettings,
-  summary,
-  compact = false
-}) {
-  const loading = status?.state === "loading";
-  const state = status?.state ?? "idle";
-  const ready = configStatus?.ready ?? configured;
-  const message =
-    status?.message ||
-    (!ready ? configStatus?.message ?? "Set up AI enrichment in Settings." : !hasImage ? "Add a photo first." : "Draft fields stay editable.");
-
-  return (
-    <div className={compact ? "ai-panel compact" : "ai-panel"} {...componentMeta("AiEnrichmentPanel")}>
-      <div className="ai-panel-copy">
-        <div className="ai-panel-title">
-          <Wand2 size={16} aria-hidden="true" />
-          <strong>AI enrichment</strong>
-        </div>
-        <span className={`ai-status state-${state}`} aria-live="polite">{message}</span>
-        {summary ? <small>{summary}</small> : null}
-      </div>
-      <div className="ai-panel-actions">
-        <button
-          className="primary-button"
-          type="button"
-          disabled={!hasImage || !ready || loading}
-          onClick={onEnrich}
-        >
-          <Wand2 size={16} aria-hidden="true" />
-          {loading ? "Reading" : "Enrich with AI"}
-        </button>
-        {!ready ? (
-          <button className="secondary-button" type="button" onClick={onOpenSettings}>
-            <Settings size={16} aria-hidden="true" />
-            Settings
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function AiEvidencePanel({ draft }) {
-  const evidence = draft?.evidence?.filter(Boolean).slice(0, 5) ?? [];
-  if (!evidence.length) return null;
-
-  return (
-    <div className="ai-evidence" {...componentMeta("AiEvidencePanel")}>
-      <strong>AI evidence</strong>
-      <div>
-        {evidence.map((line) => (
-          <StatusChip key={line} tone="info">{line}</StatusChip>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function ImageFileButton({ label, icon: Icon = ImagePlus, capture = false, multiple = false, onSelect }) {
   return (
     <label className="secondary-button">
@@ -2336,9 +2161,8 @@ function ImageFileButton({ label, icon: Icon = ImagePlus, capture = false, multi
   );
 }
 
-function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, onSave, onClose }) {
+function ItemDetailModal({ item, onSave, onClose }) {
   const [draft, setDraft] = useState(() => normalizeItem(item));
-  const configStatus = aiVisionConfigStatus(aiVision);
   const titleId = `item-modal-title-${item.id}`;
 
   useEffect(() => {
@@ -2422,12 +2246,6 @@ function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, o
     event.preventDefault();
     onSave(draft);
     onClose();
-  }
-
-  function handleEnrich() {
-    const normalized = normalizeItem(draft);
-    onSave(normalized);
-    onEnrich(normalized);
   }
 
   return (
@@ -2537,17 +2355,6 @@ function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, o
               </div>
             </section>
 
-            <AiEnrichmentPanel
-              compact
-              configStatus={configStatus}
-              hasImage={Boolean(draft.imageDataUrl)}
-              status={aiStatus}
-              onEnrich={handleEnrich}
-              onOpenSettings={onOpenSettings}
-              summary="Saves current edits, then drafts metadata from the primary photo."
-            />
-            <AiEvidencePanel draft={aiStatus?.draft} />
-
             <div className="form-profile" {...componentMeta("ItemWeatherProfile")}>
               <strong>Weather profile</strong>
               <WeatherProfilePills item={draft} />
@@ -2603,7 +2410,7 @@ function ItemDetailModal({ item, aiVision, aiStatus, onEnrich, onOpenSettings, o
 
             <fieldset>
               <legend>Ownership</legend>
-              <NumberSelect label="Cost USD" value={draft.cost} onChange={(value) => setField("cost", value)} options={costOptions} />
+              <CostInput label="Cost USD" value={draft.cost} onChange={(value) => setField("cost", value)} options={costOptions} />
               <label>
                 Acquired
                 <input type="date" value={draft.acquired} onChange={(event) => setField("acquired", event.target.value)} />
@@ -2689,10 +2496,6 @@ function InventoryView({
   sort,
   setSort,
   onRemove,
-  aiVision,
-  aiStatus,
-  onEnrichItem,
-  onOpenSettings,
   onSaveItem
 }) {
   const [selectedItemId, setSelectedItemId] = useState("");
@@ -2885,10 +2688,6 @@ function InventoryView({
       {selectedItem ? (
         <ItemDetailModal
           item={selectedItem}
-          aiVision={aiVision}
-          aiStatus={aiStatus?.itemId === selectedItem.id ? aiStatus : emptyAiStatus}
-          onEnrich={(draftItem) => onEnrichItem(selectedItem.id, draftItem)}
-          onOpenSettings={onOpenSettings}
           onSave={onSaveItem}
           onClose={() => setSelectedItemId("")}
         />
@@ -3240,6 +3039,70 @@ function NumberSelect({ label, value, onChange, options }) {
   );
 }
 
+function CostInput({ label, value, onChange, options }) {
+  const listId = useId();
+  const [text, setText] = useState(() => formatCostInputValue(value));
+  const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) setText(formatCostInputValue(value));
+  }, [isFocused, value]);
+
+  function commit(nextText) {
+    const parsed = parseCostInputValue(nextText);
+    const nextValue = parsed ?? 0;
+    onChange(nextValue);
+    setText(formatCostInputValue(nextValue));
+  }
+
+  return (
+    <label>
+      {label}
+      <input
+        type="number"
+        min="0"
+        step="0.01"
+        inputMode="decimal"
+        list={listId}
+        value={text}
+        onFocus={() => setIsFocused(true)}
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+          const parsed = parseCostInputValue(nextText);
+          onChange(parsed ?? "");
+        }}
+        onBlur={() => {
+          setIsFocused(false);
+          commit(text);
+        }}
+        onKeyDown={(event) => {
+          if (["e", "E", "+", "-"].includes(event.key)) event.preventDefault();
+        }}
+      />
+      <datalist id={listId}>
+        {options.map((option) => (
+          <option key={optionValue(option)} value={optionValue(option)} label={labelFor(option)} />
+        ))}
+      </datalist>
+    </label>
+  );
+}
+
+function parseCostInputValue(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const number = Number(text);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return Math.round(number * 100) / 100;
+}
+
+function formatCostInputValue(value) {
+  const parsed = parseCostInputValue(value);
+  if (parsed === null) return "";
+  return Number.isInteger(parsed) ? String(parsed) : parsed.toFixed(2);
+}
+
 function SelectWithCustom({ label, value, onChange, options }) {
   const [customOpen, setCustomOpen] = useState(false);
   const normalizedOptions = options.map((option) => (typeof option === "object" ? option : { value: option, label: option }));
@@ -3478,9 +3341,7 @@ function SlotPicker({ slot, title, query, setQuery, allItems, candidates, exclud
   );
 }
 
-function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, onOpenSettings, onResetAiStatus }) {
-  const configStatus = aiVisionConfigStatus(aiVision);
-
+function CaptureView({ form, setForm, onSubmit }) {
   function setField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -3500,7 +3361,6 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
     const reader = new FileReader();
     reader.onload = () => {
       setField("imageDataUrl", String(reader.result));
-      onResetAiStatus?.();
     };
     reader.readAsDataURL(file);
   }
@@ -3533,24 +3393,13 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
                 type="button"
                 onClick={() => {
                   setField("imageDataUrl", "");
-                  onResetAiStatus?.();
                 }}
               >
                 Remove photo
               </button>
             ) : null}
           </div>
-          <AiEnrichmentPanel
-            configStatus={configStatus}
-            hasImage={Boolean(form.imageDataUrl)}
-            status={aiStatus}
-            onEnrich={onEnrich}
-            onOpenSettings={onOpenSettings}
-            summary="Uses the selected photo to draft item metadata."
-          />
         </div>
-
-        <AiEvidencePanel draft={aiStatus?.draft} />
 
         <div className="form-profile" {...componentMeta("CaptureWeatherProfile")}>
           <strong>Weather profile</strong>
@@ -3607,7 +3456,7 @@ function CaptureView({ form, setForm, onSubmit, aiVision, aiStatus, onEnrich, on
 
         <fieldset>
           <legend>Ownership</legend>
-          <NumberSelect label="Cost USD" value={form.cost} onChange={(value) => setField("cost", value)} options={costOptions} />
+          <CostInput label="Cost USD" value={form.cost} onChange={(value) => setField("cost", value)} options={costOptions} />
           <NumberSelect label="Times worn" value={form.wears} onChange={(value) => setField("wears", value)} options={wearCountOptions} />
           <label>
             Acquired
@@ -3713,24 +3562,9 @@ function SettingsView({
   importRef,
   onImport,
   onUpdateWeatherSettings,
-  onUpdateAiVisionSettings,
   onRemoveStarterWardrobe,
   starterItemCount
 }) {
-  const aiVision = normalizeAiVisionSettings(settings.aiVision);
-  const aiStatus = aiVisionConfigStatus(aiVision);
-  const missingAiFields = new Set(aiStatus.missing);
-
-  function updateProvider(provider) {
-    const defaults = aiVisionDefaultsForProvider(provider);
-    onUpdateAiVisionSettings({
-      provider,
-      endpoint: defaults.endpoint,
-      model: defaults.model,
-      apiKey: provider === "off" ? "" : aiVision.apiKey
-    });
-  }
-
   return (
     <section className="settings-grid" {...componentMeta("SettingsView")}>
       <div className="panel">
@@ -3761,77 +3595,6 @@ function SettingsView({
             accept="application/json"
             onChange={(event) => onImport(event.target.files?.[0]).catch((error) => alert(error.message))}
           />
-        </div>
-      </div>
-
-      <div className="panel">
-        <div className="panel-header">
-          <div>
-            <h1>AI enrichment</h1>
-            <span className="panel-subtitle">Photo metadata drafts from your selected provider</span>
-          </div>
-        </div>
-        <div className="settings-list ai-settings-list">
-          <Select
-            label="Provider"
-            value={aiVision.provider}
-            onChange={updateProvider}
-            options={aiVisionProviderOptions}
-          />
-          <label>
-            API endpoint
-            <input
-              className={missingAiFields.has("API endpoint") ? "field-missing" : ""}
-              value={aiVision.endpoint}
-              onChange={(event) => onUpdateAiVisionSettings({ endpoint: event.target.value })}
-              placeholder={aiVision.provider === "wardrobe" ? "https://host/path" : "Provider endpoint"}
-              disabled={aiVision.provider === "off"}
-              required={aiVision.provider !== "off"}
-              aria-invalid={missingAiFields.has("API endpoint")}
-              inputMode="url"
-            />
-            <span className="field-help">
-              {aiVision.provider === "wardrobe" ? "Full POST URL for the image enrichment endpoint." : "Provider API URL."}
-            </span>
-          </label>
-          <label>
-            Model
-            <input
-              className={missingAiFields.has("Model") ? "field-missing" : ""}
-              value={aiVision.model}
-              onChange={(event) => onUpdateAiVisionSettings({ model: event.target.value })}
-              placeholder={aiVision.provider === "wardrobe" ? "Optional" : "Vision model"}
-              disabled={aiVision.provider === "off" || aiVision.provider === "wardrobe"}
-              required={aiVision.provider !== "off" && aiVision.provider !== "wardrobe"}
-              aria-invalid={missingAiFields.has("Model")}
-            />
-            <span className="field-help">
-              {aiVision.provider === "wardrobe" ? "Not used for Wardrobe Vision API." : "Required by hosted model providers."}
-            </span>
-          </label>
-          <label>
-            API key or token
-            <input
-              className={missingAiFields.has("API key") ? "field-missing" : ""}
-              type="password"
-              value={aiVision.apiKey}
-              onChange={(event) => onUpdateAiVisionSettings({ apiKey: event.target.value })}
-              placeholder={aiVision.provider === "wardrobe" ? "Bearer token if required" : "Provider key"}
-              disabled={aiVision.provider === "off"}
-              required={aiVision.provider !== "off" && aiVision.provider !== "wardrobe"}
-              aria-invalid={missingAiFields.has("API key")}
-              autoComplete="off"
-            />
-            <span className="field-help">
-              {aiVision.provider === "wardrobe" ? "Paste the token only. Bearer prefix is accepted." : "Required for this provider."}
-            </span>
-          </label>
-          <div className="settings-note">
-            <StatusChip tone={aiStatus.tone} icon={Wand2}>
-              {aiStatus.ready ? "Ready" : "Needs setup"}
-            </StatusChip>
-            <span>{aiStatus.ready ? "Keys stay in this browser and are not included in exports." : aiStatus.message}</span>
-          </div>
         </div>
       </div>
 
