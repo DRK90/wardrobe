@@ -11,6 +11,8 @@ const slotMatches = {
 
 const selectionOrder = ["top", "bottom", "shoes", "outerwear", "accessory"];
 const neutralColorWords = /black|white|gray|grey|charcoal|navy|denim|stone|taupe|cream|ivory|tan|khaki|brown|camel|beige/i;
+const plainPattern = /solid|plain|none|n\/a/;
+const beamWidth = 18;
 
 function athleticSlot(item, slot) {
   if (item.category !== "athletic") return false;
@@ -28,6 +30,11 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function humanize(value) {
+  const text = String(value ?? "").replaceAll("_", " ");
+  return text ? `${text[0].toUpperCase()}${text.slice(1)}` : "";
+}
+
 function average(values, fallback = 0) {
   const numeric = values.filter((value) => Number.isFinite(value));
   if (!numeric.length) return fallback;
@@ -41,17 +48,23 @@ function daysSince(dateText) {
   return Math.max(0, Math.round((Date.now() - date.getTime()) / 86400000));
 }
 
-function hslFromRgb(red, green, blue) {
-  const max = Math.max(red, green, blue);
-  const min = Math.min(red, green, blue);
-  const delta = max - min;
-  const lightness = (max + min) / 2;
-  const chroma = delta ? delta / (1 - Math.abs(2 * lightness - 1)) : 0;
-  let hue = 0;
-  if (delta && max === red) hue = ((green - blue) / delta + (green < blue ? 6 : 0)) * 60;
-  else if (delta && max === green) hue = ((blue - red) / delta + 2) * 60;
-  else if (delta) hue = ((red - green) / delta + 4) * 60;
-  return { hue, chroma, lightness };
+function linearSrgb(channel) {
+  return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+}
+
+function oklchFromRgb(red, green, blue) {
+  const r = linearSrgb(red);
+  const g = linearSrgb(green);
+  const b = linearSrgb(blue);
+  const lRoot = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const mRoot = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const sRoot = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const lightness = 0.2104542553 * lRoot + 0.793617785 * mRoot - 0.0040720468 * sRoot;
+  const a = 1.9779984951 * lRoot - 2.428592205 * mRoot + 0.4505937099 * sRoot;
+  const bAxis = 0.0259040371 * lRoot + 0.7827717662 * mRoot - 0.808675766 * sRoot;
+  const chroma = Math.sqrt(a ** 2 + bAxis ** 2);
+  const hue = (Math.atan2(bAxis, a) * 180) / Math.PI;
+  return { hue: hue < 0 ? hue + 360 : hue, chroma, lightness };
 }
 
 function colorProfile(item) {
@@ -74,10 +87,10 @@ function colorProfile(item) {
     const red = parseInt(value.slice(0, 2), 16) / 255;
     const green = parseInt(value.slice(2, 4), 16) / 255;
     const blue = parseInt(value.slice(4, 6), 16) / 255;
-    const color = hslFromRgb(red, green, blue);
+    const color = oklchFromRgb(red, green, blue);
     return {
       ...color,
-      neutral: color.chroma < 0.12 || neutralColorWords.test(item.color ?? "")
+      neutral: color.chroma < 0.035 || neutralColorWords.test(item.color ?? "")
     };
   }
 
@@ -117,7 +130,7 @@ function colorHarmonyScore(item, selections) {
   const selected = selectedItems(selections);
   if (!selected.length) return 0;
   const profile = colorProfile(item);
-  const colorfulSelected = selected.filter((candidate) => !colorProfile(candidate).neutral).length;
+  const colorfulSelected = selected.map(colorProfile).filter((candidate) => !candidate.neutral);
 
   const pairScores = selected.map((candidate) => {
     const other = colorProfile(candidate);
@@ -125,20 +138,78 @@ function colorHarmonyScore(item, selections) {
     const lightGap = Math.abs(profile.lightness - other.lightness);
     let score = 0;
 
-    if (profile.neutral || other.neutral) score += 4;
-    else if (hueGap <= 20) score += 6;
-    else if (hueGap <= 45) score += 4;
-    else if (hueGap >= 155 && hueGap <= 205) score += 3;
-    else if (hueGap >= 105 && hueGap <= 135) score += 2;
-    else if (hueGap >= 60 && hueGap <= 145 && profile.chroma > 0.05 && other.chroma > 0.05) score -= 5;
+    if (profile.neutral && other.neutral) score += 3;
+    else if (profile.neutral || other.neutral) score += 6;
+    else if (hueGap <= 18) score += 7;
+    else if (hueGap <= 52) score += 5;
+    else if (hueGap >= 160) score += Math.max(profile.chroma, other.chroma) > 0.16 ? 2 : 4;
+    else if (hueGap >= 125) score += 2;
+    else if (hueGap >= 62 && profile.chroma > 0.07 && other.chroma > 0.07) score -= 6;
 
     if (lightGap >= 0.18) score += 2;
-    if (lightGap < 0.06 && !profile.neutral && !other.neutral) score -= 1;
+    if (lightGap < 0.06 && !profile.neutral && !other.neutral) score -= 2;
+    if (profile.lightness < 0.36 && other.lightness < 0.36 && lightGap < 0.08) score -= 1;
     return score;
   });
 
-  const crowdingPenalty = !profile.neutral && colorfulSelected >= 2 ? -3 : 0;
+  const hueFamilies = new Set(colorfulSelected.map((candidate) => Math.round(candidate.hue / 45) % 8));
+  const addsNewHueFamily = !profile.neutral && !hueFamilies.has(Math.round(profile.hue / 45) % 8);
+  const crowdingPenalty = addsNewHueFamily && hueFamilies.size >= 2 ? -5 : 0;
   return average(pairScores, 0) + crowdingPenalty;
+}
+
+function materialProfile(item) {
+  const text = `${item.material ?? ""} ${item.fabric ?? ""} ${item.subcategory ?? ""}`.toLowerCase();
+  return {
+    formal: /worsted|cashmere|silk|satin|oxford|poplin|dress|calf|full-grain|suede|leather/.test(text),
+    rugged: /denim|canvas|flannel|corduroy|waxed|workwear/.test(text),
+    technical: /nylon|polyester|shell|waterproof|membrane|mesh|performance|elastane/.test(text),
+    warm: /wool|cashmere|down|fleece|flannel|corduroy/.test(text),
+    light: /linen|silk|chambray|mesh|seersucker|rayon|viscose/.test(text)
+  };
+}
+
+function materialCompatibilityScore(item, slot, request, selections) {
+  const weather = effectiveWeatherForExposure(request);
+  const profile = materialProfile(item);
+  const selected = selectedWithoutSlot(selections, slot);
+  const selectedProfiles = selected.map(materialProfile);
+  let score = 0;
+
+  if (request.outfitCategory === "formal") {
+    if (profile.formal) score += 5;
+    if (profile.rugged) score -= 5;
+    if (profile.technical && !(slot === "outerwear" && weather.rainPct >= 50)) score -= 5;
+  } else if (request.outfitCategory === "professional") {
+    if (profile.formal) score += 3;
+    if (profile.rugged) score -= 2;
+    if (profile.technical && slot !== "outerwear") score -= 3;
+  } else if (request.outfitCategory === "athletic") {
+    score += profile.technical ? 6 : -3;
+  }
+
+  if (slot === "shoes") {
+    if (["formal", "professional"].includes(request.outfitCategory)) score += profile.formal ? 6 : -5;
+    if (request.outfitCategory === "athletic") score += profile.technical ? 5 : -4;
+  }
+
+  if (weather.tempF >= 80) {
+    if (profile.light) score += 4;
+    if (profile.warm) score -= 5;
+  }
+  if (weather.tempF <= 45 && profile.warm) score += 3;
+
+  selectedProfiles.forEach((other) => {
+    if (profile.formal && other.formal) score += 1.5;
+    if (profile.rugged && other.rugged) score += 1.5;
+    if (profile.technical && other.technical && request.outfitCategory === "athletic") score += 2;
+    if ((profile.formal && other.rugged) || (profile.rugged && other.formal)) score -= 2.5;
+    if ((profile.formal && other.technical) || (profile.technical && other.formal)) {
+      if (!(slot === "outerwear" && weather.rainPct >= 50)) score -= 2;
+    }
+  });
+
+  return score;
 }
 
 function styleCompatibilityScore(item, slot, request, selections) {
@@ -148,7 +219,7 @@ function styleCompatibilityScore(item, slot, request, selections) {
   const selectedFormality = average(selected.map((candidate) => Number(candidate.formality ?? 3)), request.formality);
   const formalityGap = Math.abs((item.formality ?? 3) - selectedFormality);
   const pattern = String(item.pattern ?? "solid").toLowerCase();
-  const patternedSelected = selected.filter((candidate) => !/solid|plain|none|n\/a/.test(String(candidate.pattern ?? "solid").toLowerCase())).length;
+  const patternedSelected = selected.filter((candidate) => !plainPattern.test(String(candidate.pattern ?? "solid").toLowerCase())).length;
   let score = 0;
 
   if (selected.length) score += Math.max(-8, 6 - formalityGap * 3);
@@ -174,7 +245,7 @@ function styleCompatibilityScore(item, slot, request, selections) {
     if ((item.condition ?? 4) <= 2) score -= 4;
   }
 
-  if (!/solid|plain|none|n\/a/.test(pattern)) {
+  if (!plainPattern.test(pattern)) {
     score += patternedSelected ? -5 : 2;
   }
 
@@ -248,13 +319,24 @@ function targetClimate(request) {
   return "mild";
 }
 
+function seededVariation(itemId, slot, seed) {
+  let hash = 2166136261;
+  const text = `${seed ?? 0}:${slot}:${itemId}`;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  hash ^= hash >>> 16;
+  return ((hash >>> 0) / 4294967295 - 0.5) * 3;
+}
+
 function scoreItem(item, slot, request, usedIds, selections) {
   if (usedIds.has(item.id)) return -Infinity;
   if (item.status !== "active") return -Infinity;
   if (item.laundry === "dirty" || item.laundry === "repair") return -Infinity;
   if (!matchesOutfitSlot(item, slot)) return -Infinity;
   if (item.category === "suit" && !["formal", "professional"].includes(request.outfitCategory)) return -Infinity;
-  if (slot === "top" && selections.outerwear?.category === "suit" && item.category === "dress") return -Infinity;
+  if (slot === "top" && primarySelected(selections, "outerwear")?.category === "suit" && item.category === "dress") return -Infinity;
 
   const weather = effectiveWeatherForExposure(request);
   const warmthTarget = targetWarmth(weather.tempF);
@@ -282,11 +364,13 @@ function scoreItem(item, slot, request, usedIds, selections) {
           ? -4
           : 0
     : 0;
-  const variation = ((request.seed ?? 0) * 17 + item.id.length * 13 + slot.length * 7) % 7;
+  const repeatPenalty = request.avoidItemIds?.includes(item.id) ? -18 : 0;
+  const variation = seededVariation(item.id, slot, request.seed);
   const inferredWeatherFit = (itemWeatherFit(item, request).score - 60) / 2.7;
   const colorFit = colorHarmonyScore(item, selectedWithoutSlot(selections, slot));
   const styleFit = styleCompatibilityScore(item, slot, request, selections);
   const layerFit = layerCompatibilityScore(item, slot, request, selections);
+  const materialFit = materialCompatibilityScore(item, slot, request, selections);
 
   return (
     categoryFit +
@@ -300,23 +384,21 @@ function scoreItem(item, slot, request, usedIds, selections) {
     colorFit +
     styleFit +
     layerFit +
+    materialFit +
     underusedFit +
     recencyFit +
     recentWearPenalty +
+    repeatPenalty +
     variation
   );
 }
 
-function candidatesForSlot(items, slot, request, usedIds, selections) {
+function candidatesForSlot(items, slot, request, usedIds, selections, limit = 8) {
   return items
     .map((item) => ({ item, score: scoreItem(item, slot, request, usedIds, selections) }))
     .filter((candidate) => Number.isFinite(candidate.score))
     .sort((a, b) => b.score - a.score || a.item.name.localeCompare(b.item.name))
-    .slice(0, 8);
-}
-
-function primarySelections(selections) {
-  return Object.fromEntries(Object.entries(selections).map(([key, values]) => [key, values[0]]));
+    .slice(0, limit);
 }
 
 function reasonBitsFor(selected, slot, request, selections) {
@@ -329,63 +411,88 @@ function reasonBitsFor(selected, slot, request, selections) {
   if (request.windMph >= 16 && selected.wind >= 3) reasonBits.push("wind");
   if (selected.formality >= request.formality) reasonBits.push("formality");
   if (weatherFit.score >= 78) reasonBits.push("weather fit");
-  if (colorHarmonyScore(selected, selectedWithoutSlot(primarySelections(selections), slot)) >= 4) reasonBits.push("color");
+  if (colorHarmonyScore(selected, selectedWithoutSlot(selections, slot)) >= 4) reasonBits.push("color");
+  if (styleCompatibilityScore(selected, slot, request, selections) >= 4) reasonBits.push("style");
+  if (materialCompatibilityScore(selected, slot, request, selections) >= 3) reasonBits.push("materials");
   return reasonBits.slice(0, 4);
 }
 
-export function generateOutfit(items, request, overrides = {}) {
-  const usedIds = new Set();
-  const selections = {};
-  const alternatives = {};
+export function generateOutfit(items, request, lockedSelections = {}) {
+  const initialSelections = {};
+  const initialUsedIds = new Set();
   const reasons = [];
 
   for (const slot of slotOrder) {
-    const slotOverrides = Array.isArray(overrides[slot])
-      ? overrides[slot]
-      : overrides[slot]
-        ? [overrides[slot]]
+    const lockedIds = Array.isArray(lockedSelections[slot])
+      ? lockedSelections[slot]
+      : lockedSelections[slot]
+        ? [lockedSelections[slot]]
         : [];
 
-    if (!slotOverrides.length) continue;
-    selections[slot] = [];
-    slotOverrides.forEach((itemId) => {
-      const override = items.find((item) => item.id === itemId && matchesOutfitSlot(item, slot));
-      if (override && !usedIds.has(override.id)) {
-        selections[slot].push(override);
-        usedIds.add(override.id);
-      }
+    lockedIds.forEach((itemId) => {
+      const lockedItem = items.find((item) => item.id === itemId && matchesOutfitSlot(item, slot));
+      if (!lockedItem || initialUsedIds.has(lockedItem.id)) return;
+      initialSelections[slot] = [...(initialSelections[slot] ?? []), lockedItem];
+      initialUsedIds.add(lockedItem.id);
     });
-    if (!selections[slot].length) delete selections[slot];
   }
 
+  let states = [{ selections: initialSelections, usedIds: initialUsedIds, score: 0 }];
   for (const slot of selectionOrder) {
-    const weather = effectiveWeatherForExposure(request);
-    const skipOuterwear =
-      slot === "outerwear" &&
-      weather.tempF > 60 &&
-      weather.rainPct < 45 &&
-      weather.windMph < 16 &&
-      !["formal", "professional"].includes(request.outfitCategory);
-    if (skipOuterwear && !selections[slot]?.length) {
-      alternatives[slot] = [];
-      continue;
-    }
+    const expanded = states.flatMap((state) => {
+      if (state.selections[slot]?.length) return [state];
 
-    const candidates = candidatesForSlot(items, slot, request, usedIds, primarySelections(selections));
-    alternatives[slot] = candidates;
+      const weather = effectiveWeatherForExposure(request);
+      const top = primarySelected(state.selections, "top");
+      const skipBottom = slot === "bottom" && top?.category === "dress";
+      const skipOuterwear =
+        slot === "outerwear" &&
+        weather.tempF > 60 &&
+        weather.rainPct < 45 &&
+        weather.windMph < 16 &&
+        !["formal", "professional"].includes(request.outfitCategory);
+      if (skipBottom || skipOuterwear) return [state];
 
-    if (!selections[slot]?.length && candidates[0]) {
-      selections[slot] = [candidates[0].item];
-      usedIds.add(candidates[0].item.id);
-    }
+      const candidates = candidatesForSlot(
+        items,
+        slot,
+        request,
+        state.usedIds,
+        state.selections,
+        6
+      );
+      if (!candidates.length) return [state];
+
+      return candidates.map((candidate) => ({
+        selections: { ...state.selections, [slot]: [candidate.item] },
+        usedIds: new Set([...state.usedIds, candidate.item.id]),
+        score: state.score + candidate.score
+      }));
+    });
+
+    states = expanded
+      .sort((first, second) => second.score - first.score || selectionKey(first.selections).localeCompare(selectionKey(second.selections)))
+      .slice(0, beamWidth);
   }
+
+  const selections = states[0]?.selections ?? initialSelections;
+  const alternatives = Object.fromEntries(
+    slotOrder.map((slot) => {
+      const selectedInOtherSlots = selectedWithoutSlot(selections, slot);
+      const usedInOtherSlots = new Set(selectedInOtherSlots.map((item) => item.id));
+      return [
+        slot,
+        candidatesForSlot(items, slot, request, usedInOtherSlots, selections, 8)
+      ];
+    })
+  );
 
   for (const slot of slotOrder) {
     if (!selections[slot]?.length) continue;
     selections[slot].forEach((selected, index) => {
       const reasonBits = reasonBitsFor(selected, slot, request, selections);
-      const slotLabel = index ? `${slot} ${index + 1}` : slot;
-      reasons.push(`${slotLabel}: ${selected.name}${reasonBits.length ? ` · ${reasonBits.join(", ")}` : ""}`);
+      const slotLabel = humanize(index ? `${slot} ${index + 1}` : slot);
+      reasons.push(`${slotLabel}: ${selected.name}${reasonBits.length ? ` · ${reasonBits.map(humanize).join(", ")}` : ""}`);
     });
   }
 
@@ -402,7 +509,13 @@ export function generateOutfit(items, request, overrides = {}) {
     reasons,
     summary:
       Object.keys(selections).length > 0
-        ? `${request.outfitCategory.replace("_", " ")} · ${request.exposure ?? "mixed"} · ${request.tempF} F · ${request.rainPct}% rain`
+        ? `${humanize(request.outfitCategory)} · ${humanize(request.exposure ?? "mixed")} · ${request.tempF} F · ${request.rainPct}% rain`
         : "Add ready items to build an outfit."
   };
+}
+
+function selectionKey(selections) {
+  return slotOrder
+    .flatMap((slot) => selectionList(selections?.[slot]).map((item) => item.id))
+    .join(":");
 }

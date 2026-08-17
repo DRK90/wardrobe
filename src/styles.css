@@ -484,8 +484,18 @@ textarea {
   gap: var(--space-4);
 }
 
-.today-outfits-header .panel-header {
-  border-bottom: 0;
+.section-header {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.section-header h1 {
+  margin: 0;
+  font-size: 1.1rem;
+  text-wrap: balance;
 }
 
 .today-outfit-card .panel-actions {
@@ -494,7 +504,6 @@ textarea {
 
 .today-outfit-controls {
   border-bottom: 1px solid var(--color-line);
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
 }
 
 .weather-panel {
@@ -546,7 +555,7 @@ textarea {
 }
 
 .weather-empty {
-  min-height: 216px;
+  min-height: 180px;
   border: 1px solid var(--color-line);
   border-radius: var(--radius);
   display: grid;
@@ -572,6 +581,7 @@ textarea {
   min-height: 34px;
   border-top: 1px solid var(--color-line);
   border-bottom: 1px solid var(--color-line);
+  padding: 0 var(--space-1);
 }
 
 .weather-secondary {
@@ -1275,21 +1285,28 @@ textarea {
   gap: var(--space-4);
 }
 
-.planner-controls,
+.planner-schedule-controls,
+.outfit-preference-controls,
 .settings-list {
   padding: var(--space-4);
   display: grid;
-  grid-template-columns: repeat(6, minmax(118px, 1fr));
   gap: var(--space-3);
 }
 
+.planner-schedule-controls {
+  grid-template-columns: minmax(150px, 0.75fr) minmax(120px, 0.55fr) minmax(360px, 2fr);
+}
+
+.outfit-preference-controls {
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+}
+
+.planner-preference-controls {
+  border-top: 1px solid var(--color-line);
+}
+
 .planner-location-form {
-  grid-column: span 3;
   min-width: 0;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius);
-  background: var(--color-panel);
-  padding: var(--space-2);
   display: grid;
   grid-template-columns: auto minmax(110px, 1fr) auto;
   align-items: end;
@@ -1409,6 +1426,44 @@ textarea {
   font-size: 0.8rem;
 }
 
+.dirty-checkbox {
+  padding: 0 var(--space-1);
+}
+
+.wear-action-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: nowrap;
+}
+
+.preference-checkbox {
+  min-height: 34px;
+  align-self: end;
+}
+
+.formality-field {
+  min-width: 0;
+}
+
+.field-label-row {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.field-label-row output {
+  color: var(--color-ink);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.formality-field input {
+  width: 100%;
+}
+
 .outfit-panel {
   overflow: hidden;
 }
@@ -1447,6 +1502,17 @@ textarea {
   grid-template-columns: 78px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-2);
+  padding: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  transition:
+    background-color 170ms ease,
+    border-color 170ms ease;
+}
+
+.outfit-slot-item.is-locked {
+  border-color: color-mix(in oklch, var(--color-primary), white 58%);
+  background: oklch(0.965 0.018 200);
 }
 
 .outfit-slot-item > div {
@@ -1466,7 +1532,26 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: end;
+  flex-wrap: wrap;
   gap: var(--space-1);
+}
+
+.slot-lock-toggle {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-1);
+  color: var(--color-ink);
+  font-size: 0.74rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.slot-lock-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
 }
 
 .slot-action-button,
@@ -1531,6 +1616,7 @@ textarea {
 }
 
 .evidence-list {
+  border-top: 1px solid var(--color-line);
   padding: var(--space-4);
   display: grid;
   gap: var(--space-2);
@@ -1557,6 +1643,10 @@ textarea {
 .weather-fit-list small {
   color: var(--color-muted);
   font-size: 0.72rem;
+}
+
+.weather-fit-list span {
+  text-transform: capitalize;
 }
 
 .weather-fit-list strong {
@@ -1839,34 +1929,6 @@ meter {
   gap: var(--space-2);
 }
 
-body.local-component-labels [data-component] {
-  position: relative;
-}
-
-body.local-component-labels [data-component]::before {
-  content: attr(data-component);
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  z-index: 5;
-  max-width: calc(100% - 4px);
-  border: 1px solid color-mix(in oklch, var(--color-primary), white 45%);
-  border-radius: 999px;
-  background: var(--color-bg);
-  color: var(--color-primary-strong);
-  padding: 1px 6px;
-  font-size: 0.62rem;
-  font-weight: 850;
-  line-height: 1.4;
-  pointer-events: none;
-  opacity: 0.86;
-}
-
-body.local-component-labels .sidebar[data-component]::before,
-body.local-component-labels .app-shell[data-component]::before {
-  display: none;
-}
-
 .toast {
   position: fixed;
   right: var(--space-4);
@@ -1927,11 +1989,8 @@ body.local-component-labels .app-shell[data-component]::before {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 
-  .planner-controls {
-    grid-template-columns: repeat(3, minmax(180px, 1fr));
-  }
-
-  .today-outfit-controls {
+  .planner-schedule-controls,
+  .outfit-preference-controls {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 
@@ -2016,8 +2075,8 @@ body.local-component-labels .app-shell[data-component]::before {
 
   .dashboard-grid,
   .dashboard-grid.two,
-  .planner-controls,
-  .today-outfit-controls,
+  .planner-schedule-controls,
+  .outfit-preference-controls,
   .settings-list,
   .capture-form fieldset,
   .item-modal-form fieldset,
@@ -2049,6 +2108,24 @@ body.local-component-labels .app-shell[data-component]::before {
     grid-template-areas:
       "places"
       "main";
+  }
+
+  .weather-empty {
+    min-height: 136px;
+    padding: var(--space-4);
+    text-align: center;
+  }
+
+  .today-outfit-card .panel-header,
+  .planner-control-panel .panel-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .today-outfit-card .panel-actions,
+  .planner-control-panel .panel-actions {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .weather-card-top,
@@ -2127,7 +2204,8 @@ body.local-component-labels .app-shell[data-component]::before {
   .primary-button,
   .secondary-button,
   .slot-action-button,
-  .slot-add-button {
+  .slot-add-button,
+  .slot-lock-toggle {
     min-height: 44px;
   }
 }

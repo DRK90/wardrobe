@@ -16,8 +16,9 @@
     "dev": "vite --host 0.0.0.0 --port 5175",
     "start": "npm run dev",
     "build": "vite build",
+    "test": "node --test",
     "preview": "vite preview --host 0.0.0.0 --port 5175",
-    "verify": "node scripts/verify.mjs && vite build"
+    "verify": "node scripts/verify.mjs && npm test && vite build"
   },
   "dependencies": {
     "lucide-react": "^1.22.0",
