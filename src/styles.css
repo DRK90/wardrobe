@@ -1154,6 +1154,22 @@ textarea {
   overflow: auto;
 }
 
+.inventory-panel {
+  height: calc(100dvh - var(--space-8));
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+}
+
+.inventory-panel .panel-header {
+  flex: 0 0 auto;
+}
+
+.inventory-panel .table-wrap {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .data-table {
   width: 100%;
   min-width: 1280px;
@@ -2372,6 +2388,17 @@ meter {
   .table-wrap {
     width: calc(100vw - (var(--space-4) * 2));
     max-width: calc(100vw - (var(--space-4) * 2));
+  }
+
+  .inventory-panel {
+    height: auto;
+  }
+
+  .inventory-panel .table-wrap {
+    height: 68dvh;
+    min-height: 320px;
+    max-height: 720px;
+    flex: 0 0 auto;
   }
 
   .calendar-toolbar {

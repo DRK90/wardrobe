@@ -42,6 +42,7 @@ import {
 } from "./data.js";
 import { generateOutfit, matchesOutfitSlot, recommendSocks } from "./outfitEngine.js";
 import { exposureOptions, inferWeatherProfile, itemWeatherFit } from "./clothingMeta.js";
+import { groupColorsBySwatch } from "./colorAnalytics.js";
 import {
   loadItems,
   loadOutfitDays,
@@ -581,7 +582,7 @@ function compareSwatches(a, b) {
     first.hue - second.hue ||
     first.lightness - second.lightness ||
     second.chroma - first.chroma ||
-    String(a.color).localeCompare(String(b.color))
+    String(a.colors?.[0] ?? a.color).localeCompare(String(b.colors?.[0] ?? b.color))
   );
 }
 
@@ -603,12 +604,7 @@ function analyticsFor(items, wearLogs) {
   );
   const byLaundry = [...groupTotals(active, "laundry").values()].sort((a, b) => b.count - a.count);
   const byFormality = [...groupTotals(active, "formality", "cost").values()].sort((a, b) => Number(a.label) - Number(b.label));
-  const colors = active.reduce((list, item) => {
-    if (!list.some((entry) => entry.swatch === item.swatch)) {
-      list.push({ swatch: item.swatch, color: item.color, count: active.filter((candidate) => candidate.swatch === item.swatch).length });
-    }
-    return list;
-  }, []);
+  const colors = groupColorsBySwatch(active);
   const gaps = findWardrobeGaps(active);
   const careQueue = active
     .filter((item) => item.laundry !== "ready" || item.condition <= 2)
@@ -2526,6 +2522,9 @@ function BrandCoverageList({ rows }) {
 
 function ColorPalettePanel({ colors, setFilters, setQuery, setView }) {
   const sorted = [...colors].sort(compareSwatches);
+  const legendEntries = sorted.flatMap((entry) =>
+    entry.colors.map((color) => ({ swatch: entry.swatch, color }))
+  );
   const total = Math.max(1, sorted.reduce((sum, entry) => sum + entry.count, 0));
   let cursor = 0;
   const gradient = sorted.length
@@ -2549,7 +2548,7 @@ function ColorPalettePanel({ colors, setFilters, setQuery, setView }) {
       <div className="color-pie-layout">
         <div className="color-pie" style={{ "--pie": gradient }} aria-label="Wardrobe colors" />
         <div className="palette-grid compact">
-          {sorted.map((entry) => (
+          {legendEntries.map((entry) => (
             <button
               key={`${entry.swatch}-${entry.color}`}
               className="palette-swatch"
@@ -2995,7 +2994,7 @@ function InventoryView({
   ];
 
   return (
-    <section className="panel" {...componentMeta("InventoryView")}>
+    <section className="panel inventory-panel" {...componentMeta("InventoryView")}>
       <div className="panel-header">
         <div>
           <h1>Inventory</h1>
