@@ -76,6 +76,7 @@ Wardrobe uses browser storage, not a server database:
 - `items`: wardrobe inventory records.
 - `settings`: local app, weather, and starter-item preferences.
 - `wearLogs`: local wear history.
+- `outfitDays`: saved Today outfits and future outfit plans by calendar date.
 - `weatherCache`: cached ZIP forecast responses.
 
 Deleting browser data for the site deletes the local wardrobe copy. Use Settings

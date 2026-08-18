@@ -13,6 +13,26 @@ const selectionOrder = ["top", "bottom", "shoes", "outerwear", "accessory"];
 const neutralColorWords = /black|white|gray|grey|charcoal|navy|denim|stone|taupe|cream|ivory|tan|khaki|brown|camel|beige/i;
 const plainPattern = /solid|plain|none|n\/a/;
 const beamWidth = 18;
+const sockColorOptions = [
+  { id: "black", label: "Black", swatch: "#202326" },
+  { id: "charcoal", label: "Charcoal", swatch: "#454a4e" },
+  { id: "gray", label: "Gray", swatch: "#858b90" },
+  { id: "navy", label: "Navy", swatch: "#263a58" },
+  { id: "brown", label: "Brown", swatch: "#624537" },
+  { id: "tan", label: "Tan", swatch: "#b09572" },
+  { id: "white", label: "White", swatch: "#f4f4f1" }
+];
+const sockColorPreferences = {
+  black: { black: 12, charcoal: 8, gray: 3, navy: 2 },
+  charcoal: { charcoal: 12, black: 8, gray: 7, navy: 4 },
+  gray: { gray: 12, charcoal: 9, black: 5, navy: 4 },
+  navy: { navy: 12, charcoal: 6, gray: 4, black: 3 },
+  brown: { brown: 12, navy: 7, tan: 6, charcoal: 2 },
+  tan: { tan: 11, brown: 8, navy: 6, gray: 4 },
+  white: { white: 12, gray: 8, tan: 5, navy: 3 },
+  olive: { navy: 8, brown: 8, tan: 6, charcoal: 5 },
+  other: { charcoal: 7, gray: 6, navy: 6, black: 4 }
+};
 
 function athleticSlot(item, slot) {
   if (item.category !== "athletic") return false;
@@ -124,6 +144,107 @@ function selectedWithoutSlot(selections, slot) {
 
 function primarySelected(selections, slot) {
   return selectionList(selections?.[slot])[0] ?? null;
+}
+
+function sockColorFamily(item) {
+  const text = `${item?.color ?? ""} ${item?.name ?? ""}`.toLowerCase();
+  if (/charcoal/.test(text)) return "charcoal";
+  if (/black/.test(text)) return "black";
+  if (/gray|grey|silver/.test(text)) return "gray";
+  if (/navy|indigo|denim|blue/.test(text)) return "navy";
+  if (/brown|chocolate|cognac|burgundy|oxblood/.test(text)) return "brown";
+  if (/tan|taupe|khaki|beige|camel|stone/.test(text)) return "tan";
+  if (/white|cream|ivory/.test(text)) return "white";
+  if (/olive|green/.test(text)) return "olive";
+  return "other";
+}
+
+function sockLengthFor(bottom, shoes, request, weather) {
+  const shoeText = `${shoes?.name ?? ""} ${shoes?.subcategory ?? ""} ${shoes?.material ?? ""}`.toLowerCase();
+  const bottomText = `${bottom?.name ?? ""} ${bottom?.subcategory ?? ""}`.toLowerCase();
+  const formalPlan = ["formal", "professional"].includes(request.outfitCategory);
+  const dressShoe = /oxford|derby|loafer|monk|dress|calf|full-grain|leather/.test(shoeText);
+  const boot = /boot/.test(shoeText);
+  const athleticShoe = /runner|running|sneaker|trainer|athletic|trail|mesh/.test(shoeText);
+  const shorts = /short/.test(bottomText);
+  let tallScore = 0;
+  let shortScore = 0;
+
+  if (formalPlan) tallScore += 12;
+  if ((request.formality ?? 3) >= 4) tallScore += 5;
+  if (dressShoe) tallScore += 9;
+  if (boot) tallScore += 10;
+  if (bottom && !shorts) tallScore += 3;
+  if (weather.tempF <= 55) tallScore += 5;
+  if (weather.tempF <= 40) tallScore += 5;
+
+  if (shorts) shortScore += 14;
+  if (athleticShoe && !boot) shortScore += 10;
+  if (request.outfitCategory === "athletic") shortScore += 8;
+  if (weather.tempF >= 76 && !formalPlan) shortScore += 5;
+
+  return tallScore >= shortScore ? "tall" : "short";
+}
+
+function sockColorFor(bottom, shoes, request, length) {
+  const bottomText = `${bottom?.name ?? ""} ${bottom?.subcategory ?? ""}`.toLowerCase();
+  const bottomIsShort = /short/.test(bottomText);
+  const bottomFamily = sockColorFamily(bottom);
+  const shoeFamily = sockColorFamily(shoes);
+
+  return sockColorOptions
+    .map((option, index) => {
+      const bottomWeight = bottom && !bottomIsShort ? 1 : 0.2;
+      let score = (sockColorPreferences[bottomFamily]?.[option.id] ?? 0) * bottomWeight;
+      score += (sockColorPreferences[shoeFamily]?.[option.id] ?? 0) * 0.65;
+
+      if (["formal", "professional"].includes(request.outfitCategory)) {
+        if (option.id === "white") score -= 16;
+        if (["navy", "charcoal", "black", "brown"].includes(option.id)) score += 3;
+      }
+      if (request.outfitCategory === "athletic" || bottomIsShort) {
+        if (["white", "gray", "black"].includes(option.id)) score += 3;
+      }
+      if (length === "tall" && option.id === "white" && request.outfitCategory !== "athletic") score -= 6;
+
+      return { ...option, score, index };
+    })
+    .sort((first, second) => second.score - first.score || first.index - second.index)[0];
+}
+
+export function recommendSocks(selections, request) {
+  const shoes = primarySelected(selections, "shoes");
+  if (!shoes) return null;
+
+  const bottom = primarySelected(selections, "bottom");
+  const weather = effectiveWeatherForExposure(request);
+  const length = sockLengthFor(bottom, shoes, request, weather);
+  const color = sockColorFor(bottom, shoes, request, length);
+  const shoeText = `${shoes.name ?? ""} ${shoes.subcategory ?? ""}`.toLowerCase();
+  const bottomText = `${bottom?.name ?? ""} ${bottom?.subcategory ?? ""}`.toLowerCase();
+  const bottomIsShort = /short/.test(bottomText);
+  const lengthReason =
+    length === "short"
+      ? bottomIsShort
+        ? "Short for shorts"
+        : "Short for athletic shoes"
+      : /boot/.test(shoeText)
+        ? "Tall for boots and coverage"
+        : ["formal", "professional"].includes(request.outfitCategory)
+          ? "Tall for a clean trouser line"
+          : weather.tempF <= 55
+            ? "Tall for cooler conditions"
+            : "Tall for full-length bottoms";
+  const colorReason = bottom && !bottomIsShort ? `${color.label} balances the bottom and shoes` : `${color.label} follows the shoes`;
+
+  return {
+    id: `virtual-socks-${length}-${color.id}`,
+    length,
+    color: color.label,
+    swatch: color.swatch,
+    name: `${humanize(length)} ${color.label.toLowerCase()} socks`,
+    reason: `${lengthReason} · ${colorReason}`
+  };
 }
 
 function colorHarmonyScore(item, selections) {
@@ -501,10 +622,13 @@ export function generateOutfit(items, request, lockedSelections = {}) {
     if (slot === "accessory" && !selections.accessory?.length) return false;
     return !selections[slot]?.length;
   });
+  const socks = recommendSocks(selections, request);
+  if (socks) reasons.push(`Socks: ${socks.name} · ${socks.reason}`);
 
   return {
     selections,
     alternatives,
+    socks,
     missing,
     reasons,
     summary:

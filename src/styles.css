@@ -484,6 +484,247 @@ textarea {
   gap: var(--space-4);
 }
 
+.calendar-layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 430px) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.calendar-panel,
+.calendar-detail {
+  overflow: hidden;
+}
+
+.calendar-toolbar {
+  min-height: 58px;
+  border-bottom: 1px solid var(--color-line);
+  padding: var(--space-3) var(--space-4);
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.calendar-toolbar h1 {
+  margin: 0;
+  text-align: center;
+  font-size: 1rem;
+}
+
+.icon-only-button {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  display: grid;
+  place-items: center;
+}
+
+.icon-only-button:hover {
+  border-color: var(--color-primary);
+}
+
+.calendar-weekdays,
+.calendar-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.calendar-weekdays {
+  min-height: 30px;
+  align-items: center;
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-panel);
+}
+
+.calendar-weekdays span {
+  color: var(--color-muted);
+  text-align: center;
+  font-size: 0.66rem;
+  font-weight: 800;
+}
+
+.calendar-day {
+  min-width: 0;
+  height: 64px;
+  border: 0;
+  border-right: 1px solid var(--color-line);
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-bg);
+  color: var(--color-ink);
+  padding: 6px;
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  text-align: left;
+}
+
+.calendar-day:nth-child(7n) {
+  border-right: 0;
+}
+
+.calendar-day:hover {
+  background: var(--color-panel);
+}
+
+.calendar-day.outside-month {
+  color: var(--color-subtle);
+  background: var(--color-panel);
+}
+
+.calendar-day.selected {
+  background: oklch(0.94 0.025 200);
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+.calendar-day.today time {
+  min-width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: var(--color-bg);
+  display: grid;
+  place-items: center;
+}
+
+.calendar-day time {
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.calendar-day-status {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.calendar-day-status small {
+  border-radius: 3px;
+  padding: 1px 3px;
+  font-size: 0.57rem;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.calendar-day-status .worn {
+  background: oklch(0.92 0.042 152);
+  color: oklch(0.31 0.092 152);
+}
+
+.calendar-day-status .planned {
+  background: oklch(0.91 0.029 200);
+  color: var(--color-primary-strong);
+}
+
+.calendar-detail-body {
+  padding: 0 var(--space-4);
+}
+
+.calendar-outfit-summary {
+  padding: var(--space-4) 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.calendar-outfit-summary + .calendar-outfit-summary {
+  border-top: 1px solid var(--color-line);
+}
+
+.calendar-outfit-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.calendar-outfit-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.calendar-outfit-heading strong {
+  font-size: 0.9rem;
+}
+
+.calendar-outfit-heading span {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.calendar-outfit-items {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-2) var(--space-4);
+}
+
+.calendar-outfit-items > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.calendar-outfit-items > div > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.calendar-outfit-items small,
+.calendar-outfit-items em {
+  color: var(--color-muted);
+  font-size: 0.68rem;
+  font-style: normal;
+}
+
+.calendar-outfit-items strong,
+.calendar-outfit-items em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-outfit-items strong {
+  font-size: 0.78rem;
+}
+
+.calendar-outfit-items .sock-icon {
+  width: 34px;
+  height: 34px;
+}
+
+.calendar-outfit-items .sock-icon svg {
+  width: 25px;
+  height: 25px;
+}
+
+.calendar-empty {
+  min-height: 220px;
+  padding: var(--space-6);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--space-2);
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.calendar-empty strong {
+  color: var(--color-ink);
+}
+
+.calendar-empty span {
+  max-width: 42ch;
+  line-height: 1.45;
+}
+
 .section-header {
   min-height: 44px;
   display: flex;
@@ -1475,7 +1716,7 @@ textarea {
   grid-template-areas:
     "outer top accessory"
     "outer bottom accessory"
-    "shoes shoes shoes";
+    "shoes shoes socks";
   gap: var(--space-3);
   background: var(--color-panel);
 }
@@ -1601,8 +1842,64 @@ textarea {
   grid-area: shoes;
 }
 
+.slot-socks {
+  grid-area: socks;
+}
+
 .slot-accessory {
   grid-area: accessory;
+}
+
+.sock-recommendation {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.sock-recommendation > div:last-child {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.sock-recommendation strong {
+  font-size: 0.85rem;
+}
+
+.sock-recommendation small {
+  line-height: 1.35;
+}
+
+.sock-icon {
+  width: 64px;
+  height: 78px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  background: var(--color-panel);
+  display: grid;
+  place-items: center;
+}
+
+.sock-icon svg {
+  width: 48px;
+  height: 48px;
+  overflow: visible;
+}
+
+.sock-icon path:first-child {
+  fill: var(--sock-color);
+  stroke: var(--color-ink);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
+.sock-icon .sock-cuff {
+  fill: none;
+  stroke: color-mix(in oklch, var(--color-ink), white 32%);
+  stroke-width: 1.4;
+  stroke-linecap: round;
 }
 
 .outfit-slot > span {
@@ -2004,6 +2301,10 @@ meter {
     grid-template-columns: 1fr;
   }
 
+  .calendar-layout {
+    grid-template-columns: 1fr;
+  }
+
   .side-panel {
     position: static;
   }
@@ -2073,6 +2374,26 @@ meter {
     max-width: calc(100vw - (var(--space-4) * 2));
   }
 
+  .calendar-toolbar {
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    padding-inline: var(--space-3);
+  }
+
+  .icon-only-button {
+    width: 44px;
+  }
+
+  .calendar-day {
+    height: 60px;
+    padding: var(--space-1);
+  }
+
+  .calendar-day-status {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 1px;
+  }
+
   .dashboard-grid,
   .dashboard-grid.two,
   .planner-schedule-controls,
@@ -2117,7 +2438,8 @@ meter {
   }
 
   .today-outfit-card .panel-header,
-  .planner-control-panel .panel-header {
+  .planner-control-panel .panel-header,
+  .calendar-detail .panel-header {
     align-items: stretch;
     flex-direction: column;
   }
@@ -2154,6 +2476,7 @@ meter {
       "top"
       "bottom"
       "shoes"
+      "socks"
       "accessory";
   }
 
@@ -2203,6 +2526,7 @@ meter {
   .icon-button,
   .primary-button,
   .secondary-button,
+  .icon-only-button,
   .slot-action-button,
   .slot-add-button,
   .slot-lock-toggle {

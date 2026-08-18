@@ -1,5 +1,5 @@
 const databaseName = "wardrobe-local-v2";
-const databaseVersion = 2;
+const databaseVersion = 3;
 
 function openDatabase() {
   return new Promise((resolve, reject) => {
@@ -18,6 +18,9 @@ function openDatabase() {
       }
       if (!db.objectStoreNames.contains("weatherCache")) {
         db.createObjectStore("weatherCache", { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains("outfitDays")) {
+        db.createObjectStore("outfitDays", { keyPath: "id" });
       }
     };
 
@@ -68,6 +71,14 @@ export async function loadWearLogs() {
 
 export async function saveWearLogs(logs) {
   await replaceAll("wearLogs", logs);
+}
+
+export async function loadOutfitDays() {
+  return getAll("outfitDays");
+}
+
+export async function saveOutfitDays(days) {
+  await replaceAll("outfitDays", days);
 }
 
 export async function loadWeatherCache() {

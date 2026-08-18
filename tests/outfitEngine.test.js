@@ -150,3 +150,79 @@ test("formal material and footwear cues beat an athletic material mismatch", () 
 
   assert.equal(outfit.selections.shoes[0].id, "leather-oxford");
 });
+
+test("formal trousers receive a tall sock recommendation coordinated to the bottom", () => {
+  const formalRequest = {
+    ...request,
+    outfitCategory: "professional",
+    formality: 4,
+    tempF: 68
+  };
+  const items = [
+    item({
+      id: "navy-trouser",
+      category: "bottom",
+      subcategory: "dress trouser",
+      color: "Navy",
+      swatch: "#263a58",
+      formality: 4,
+      outfitTags: ["professional"]
+    }),
+    item({
+      id: "brown-derby",
+      category: "shoes",
+      subcategory: "derby",
+      color: "Brown",
+      swatch: "#624537",
+      material: "Full-grain leather",
+      formality: 4,
+      outfitTags: ["professional"]
+    })
+  ];
+
+  const outfit = generateOutfit(items, formalRequest, {
+    bottom: ["navy-trouser"],
+    shoes: ["brown-derby"]
+  });
+
+  assert.equal(outfit.socks.id, "virtual-socks-tall-navy");
+  assert.match(outfit.socks.reason, /clean trouser line/i);
+});
+
+test("hot athletic shorts receive short socks coordinated to the shoes", () => {
+  const athleticRequest = {
+    ...request,
+    outfitCategory: "athletic",
+    formality: 1,
+    tempF: 88
+  };
+  const items = [
+    item({
+      id: "black-running-short",
+      category: "bottom",
+      subcategory: "running shorts",
+      color: "Black",
+      swatch: "#202326",
+      formality: 1,
+      outfitTags: ["athletic"]
+    }),
+    item({
+      id: "white-running-shoe",
+      category: "shoes",
+      subcategory: "running shoe",
+      color: "White",
+      swatch: "#f4f4f1",
+      material: "Mesh and rubber",
+      formality: 1,
+      outfitTags: ["athletic"]
+    })
+  ];
+
+  const outfit = generateOutfit(items, athleticRequest, {
+    bottom: ["black-running-short"],
+    shoes: ["white-running-shoe"]
+  });
+
+  assert.equal(outfit.socks.id, "virtual-socks-short-white");
+  assert.match(outfit.socks.reason, /short for shorts/i);
+});

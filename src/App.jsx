@@ -5,6 +5,7 @@ import {
   CalendarDays,
   Camera,
   Check,
+  ChevronLeft,
   Menu,
   ChevronRight,
   CloudSun,
@@ -39,18 +40,31 @@ import {
   seasonOptions,
   starterItems
 } from "./data.js";
-import { generateOutfit, matchesOutfitSlot } from "./outfitEngine.js";
+import { generateOutfit, matchesOutfitSlot, recommendSocks } from "./outfitEngine.js";
 import { exposureOptions, inferWeatherProfile, itemWeatherFit } from "./clothingMeta.js";
 import {
   loadItems,
+  loadOutfitDays,
   loadSettings,
   loadWearLogs,
   loadWeatherCache,
   saveItems,
+  saveOutfitDays,
   saveSettings,
   saveWearLogs,
   saveWeatherCache
 } from "./storage.js";
+import {
+  availableSelectionIds,
+  localDateIso,
+  monthDates,
+  resolveSavedSelections,
+  selectionIdsFor,
+  serializePlannerPlan,
+  serializeTodayPlans,
+  upsertOutfitDay,
+  wearOutfitsForDate
+} from "./outfitCalendar.js";
 import {
   activeWeatherEntry,
   cleanZip,
@@ -314,13 +328,13 @@ function money(value, digits = 0) {
 }
 
 function todayIso() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateIso();
 }
 
 function tomorrowIso() {
   const date = new Date();
   date.setDate(date.getDate() + 1);
-  return date.toISOString().slice(0, 10);
+  return localDateIso(date);
 }
 
 function makeId(prefix) {
@@ -373,6 +387,57 @@ function createTodayOutfitPlan(index = 1, requestPatch = {}) {
     outfit: null,
     lastWornDate: ""
   };
+}
+
+function restoreTodayPlans(savedPlans, items) {
+  return savedPlans.map((saved, index) => {
+    const request = {
+      ...defaultTodayRequest(index + 1),
+      ...saved.request,
+      eventDate: todayIso()
+    };
+    const selectedItemIds = availableSelectionIds(saved, items);
+    return {
+      id: saved.id || makeId("today-outfit"),
+      label: saved.label || `Outfit ${index + 1}`,
+      request,
+      locks: saved.locks ?? {},
+      outfit: generateOutfit(items, request, selectedItemIds),
+      lastWornDate: saved.lastWornDate || ""
+    };
+  });
+}
+
+function restorePlannerPlan(saved, items, fallbackRequest = defaultPlannerRequest()) {
+  const request = { ...fallbackRequest, ...saved?.request };
+  const selectedItemIds = availableSelectionIds(saved, items);
+  return {
+    request,
+    locks: saved?.locks ?? {},
+    outfit: generateOutfit(items, request, selectedItemIds)
+  };
+}
+
+function restoreTodayPlansFromWearLogs(wearLogs, items) {
+  return wearOutfitsForDate(wearLogs, todayIso(), items).map((group, index) => {
+    const request = {
+      ...defaultTodayRequest(index + 1),
+      ...(group.request ?? {}),
+      eventDate: todayIso()
+    };
+    const selectedItemIds = group.entries.reduce((selections, entry) => {
+      selections[entry.slot] = [...(selections[entry.slot] ?? []), entry.item.id];
+      return selections;
+    }, {});
+    return {
+      id: group.outfitId || makeId("today-outfit"),
+      label: group.label || `Outfit ${index + 1}`,
+      request,
+      locks: {},
+      outfit: generateOutfit(items, request, selectedItemIds),
+      lastWornDate: todayIso()
+    };
+  });
 }
 
 function normalizeEvidencePhotos(photos) {
@@ -463,6 +528,18 @@ function brandLabel(value) {
   return value || "Unbranded";
 }
 
+function brandTotals(items) {
+  return items.reduce((map, item) => {
+    const label = String(item.brand || "Unbranded").trim() || "Unbranded";
+    const key = label.toLocaleLowerCase();
+    const current = map.get(key) ?? { label, count: 0, value: 0 };
+    current.count += 1;
+    current.value += Number(item.cost || 0);
+    map.set(key, current);
+    return map;
+  }, new Map());
+}
+
 function hslFromRgb(red, green, blue) {
   const max = Math.max(red, green, blue);
   const min = Math.min(red, green, blue);
@@ -521,7 +598,7 @@ function analyticsFor(items, wearLogs) {
   const bySeason = [...groupTotals(active, "season").values()].sort((a, b) => b.count - a.count);
   const byClimate = [...groupTotals(active, "climate").values()].sort((a, b) => b.count - a.count);
   const byMaterial = [...groupTotals(active, "material").values()].sort((a, b) => b.count - a.count).slice(0, 6);
-  const byBrand = [...groupTotals(active, "brand", "cost").values()].sort(
+  const byBrand = [...brandTotals(active).values()].sort(
     (a, b) => b.count - a.count || String(a.label).localeCompare(String(b.label))
   );
   const byLaundry = [...groupTotals(active, "laundry").values()].sort((a, b) => b.count - a.count);
@@ -629,6 +706,7 @@ function App() {
   const [loaded, setLoaded] = useState(false);
   const [items, setItems] = useState([]);
   const [wearLogs, setWearLogs] = useState([]);
+  const [outfitDays, setOutfitDays] = useState([]);
   const [settings, setSettings] = useState(defaultSettings);
   const [weatherCache, setWeatherCache] = useState(emptyWeatherCache);
   const [weatherStatus, setWeatherStatus] = useState({ home: "idle", destination: "idle", plan: "idle" });
@@ -652,33 +730,48 @@ function App() {
 
   useEffect(() => {
     async function hydrate() {
-      const [storedItems, storedSettings, storedWearLogs, storedWeatherCache] = await Promise.all([
+      const [storedItems, storedSettings, storedWearLogs, storedWeatherCache, storedOutfitDays] = await Promise.all([
         loadItems(),
         loadSettings(),
         loadWearLogs(),
-        loadWeatherCache()
+        loadWeatherCache(),
+        loadOutfitDays()
       ]);
       const nextSettings = normalizeSettings(storedSettings);
       const nextItems = mergeStarterItems(storedItems, nextSettings.removedStarterIds);
+      const todayRecord = storedOutfitDays.find((day) => day.id === todayIso());
+      const savedTodayPlans = Array.isArray(todayRecord?.todayPlans) ? todayRecord.todayPlans : [];
+      const loggedTodayPlans = restoreTodayPlansFromWearLogs(storedWearLogs, nextItems);
+      const initialTodayPlans = savedTodayPlans.length
+        ? restoreTodayPlans(savedTodayPlans, nextItems)
+        : loggedTodayPlans.length
+          ? loggedTodayPlans
+          : [createTodayOutfitPlan(1)].map((plan) => {
+            const plannedRequest = {
+              ...plan.request,
+              eventDate: todayIso(),
+              eventLocation: nextSettings.destinationEnabled ? "destination" : "home"
+            };
+              return { ...plan, request: plannedRequest, outfit: generateOutfit(nextItems, plannedRequest) };
+            });
+      const initialPlannerRequest = defaultPlannerRequest();
+      const savedPlanner = storedOutfitDays.find((day) => day.id === initialPlannerRequest.eventDate)?.plannerPlan;
+      const initialPlanner = savedPlanner
+        ? restorePlannerPlan(savedPlanner, nextItems, initialPlannerRequest)
+        : {
+            request: initialPlannerRequest,
+            locks: {},
+            outfit: generateOutfit(nextItems, initialPlannerRequest)
+          };
       setItems(nextItems);
       setSettings(nextSettings);
       setWearLogs(storedWearLogs);
+      setOutfitDays(storedOutfitDays);
       setWeatherCache({ ...emptyWeatherCache, ...(storedWeatherCache ?? {}) });
-      setGeneratedOutfit(generateOutfit(nextItems, request));
-      setTodayOutfits((current) =>
-        current.map((plan) => {
-          const plannedRequest = {
-            ...plan.request,
-            eventDate: todayIso(),
-            eventLocation: nextSettings.destinationEnabled ? "destination" : "home"
-          };
-          return {
-            ...plan,
-            request: plannedRequest,
-            outfit: generateOutfit(nextItems, plannedRequest, plan.locks ?? {})
-          };
-        })
-      );
+      setRequest(initialPlanner.request);
+      setOutfitLocks(initialPlanner.locks);
+      setGeneratedOutfit(initialPlanner.outfit);
+      setTodayOutfits(initialTodayPlans);
       setLoaded(true);
     }
     hydrate();
@@ -718,8 +811,22 @@ function App() {
   }, [wearLogs, loaded]);
 
   useEffect(() => {
+    if (loaded) saveOutfitDays(outfitDays);
+  }, [outfitDays, loaded]);
+
+  useEffect(() => {
     if (loaded) saveWeatherCache(weatherCache);
   }, [weatherCache, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    setOutfitDays((current) =>
+      upsertOutfitDay(current, todayIso(), {
+        todayPlans: serializeTodayPlans(todayOutfits),
+        updatedAt: new Date().toISOString()
+      })
+    );
+  }, [loaded, todayOutfits]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -752,8 +859,15 @@ function App() {
       (key) => weatherRequest[key] !== request[key]
     );
     if (!changed) return;
+    const preservedSelections = selectionIdsFor(generatedOutfit?.selections);
     setRequest(weatherRequest);
-    setGeneratedOutfit(generateOutfit(items, weatherRequest, outfitLocks));
+    setGeneratedOutfit(
+      generateOutfit(
+        items,
+        weatherRequest,
+        Object.keys(preservedSelections).length ? preservedSelections : outfitLocks
+      )
+    );
   }, [loaded, weatherCache.home, weatherCache.plan, settings.homeZip, request.planLocationEnabled, request.planZip]);
 
   useEffect(() => {
@@ -765,10 +879,15 @@ function App() {
           (key) => weatherRequest[key] !== plan.request[key]
         );
         if (!changed && plan.outfit) return plan;
+        const preservedSelections = selectionIdsFor(plan.outfit?.selections);
         return {
           ...plan,
           request: weatherRequest,
-          outfit: generateOutfit(items, weatherRequest, plan.locks ?? {})
+          outfit: generateOutfit(
+            items,
+            weatherRequest,
+            Object.keys(preservedSelections).length ? preservedSelections : plan.locks ?? {}
+          )
         };
       })
     );
@@ -1215,7 +1334,14 @@ function App() {
       source: "today",
       markedDirty: markDirty,
       outfitId: plan.id,
-      outfitLabel: plan.label
+      outfitLabel: plan.label,
+      outfitRequest: { ...plan.request },
+      itemSnapshot: {
+        name: item.name,
+        color: item.color,
+        material: item.material,
+        swatch: item.swatch
+      }
     }));
 
     setItems(nextItems);
@@ -1290,11 +1416,60 @@ function App() {
   function updatePlannerRequest(nextRequest, options = {}) {
     const surface = options.surface ?? "planner";
     const requestWithoutHistory = { ...nextRequest, avoidItemIds: [] };
+    if (surface === "planner" && requestWithoutHistory.eventDate !== request.eventDate) {
+      loadPlannerDate(requestWithoutHistory.eventDate, requestWithoutHistory);
+      return;
+    }
     if (options.generate) {
       generateCurrentOutfit(requestWithoutHistory, outfitLocks, surface);
       return;
     }
     setRequest(requestForSurface(requestWithoutHistory, surface));
+  }
+
+  function loadPlannerDate(date, fallbackRequest = request) {
+    if (!parseDate(date)) return;
+    const saved = outfitDays.find((day) => day.id === date)?.plannerPlan;
+    if (saved) {
+      const restored = restorePlannerPlan(saved, items, { ...fallbackRequest, eventDate: date });
+      setRequest(requestForSurface({ ...restored.request, eventDate: date, avoidItemIds: [] }, "planner"));
+      setOutfitLocks(restored.locks);
+      setGeneratedOutfit(restored.outfit);
+    } else {
+      const nextRequest = requestWithKnownWeather(
+        {
+          ...fallbackRequest,
+          eventDate: date,
+          avoidItemIds: [],
+          seed: Number(date.replaceAll("-", "")) % 100000
+        },
+        "planner"
+      );
+      setRequest(nextRequest);
+      setOutfitLocks({});
+      setGeneratedOutfit(generateOutfit(items, nextRequest));
+    }
+    setEventForecastStatus({ state: "idle", message: "" });
+  }
+
+  function openPlannerForDate(date) {
+    loadPlannerDate(date, { ...request, eventDate: date });
+    setView("planner");
+  }
+
+  function savePlannerPlan() {
+    const date = request.eventDate;
+    if (!parseDate(date) || !generatedOutfit) {
+      showToast("Choose a date and outfit first");
+      return;
+    }
+    setOutfitDays((current) =>
+      upsertOutfitDay(current, date, {
+        plannerPlan: serializePlannerPlan(request, outfitLocks, generatedOutfit),
+        updatedAt: new Date().toISOString()
+      })
+    );
+    showToast(`Plan saved for ${formatDay(date)}`);
   }
 
   function saveNewItem(event) {
@@ -1312,9 +1487,10 @@ function App() {
     delete exportSettings.aiApiKey;
     const payload = {
       exportedAt: new Date().toISOString(),
-      version: 4,
+      version: 5,
       items,
       wearLogs,
+      outfitDays,
       settings: exportSettings,
       weatherCache
     };
@@ -1332,8 +1508,35 @@ function App() {
     const text = await file.text();
     const payload = JSON.parse(text);
     if (!Array.isArray(payload.items)) throw new Error("Import file must include an items array.");
-    setItems(payload.items.map(normalizeItem));
-    setWearLogs(Array.isArray(payload.wearLogs) ? payload.wearLogs : []);
+    const importedItems = payload.items.map(normalizeItem);
+    const importedWearLogs = Array.isArray(payload.wearLogs) ? payload.wearLogs : [];
+    const importedOutfitDays = Array.isArray(payload.outfitDays) ? payload.outfitDays : [];
+    const todayRecord = importedOutfitDays.find((day) => day.id === todayIso());
+    const loggedTodayPlans = restoreTodayPlansFromWearLogs(importedWearLogs, importedItems);
+    const importedTodayPlans = Array.isArray(todayRecord?.todayPlans) && todayRecord.todayPlans.length
+      ? restoreTodayPlans(todayRecord.todayPlans, importedItems)
+      : loggedTodayPlans.length
+        ? loggedTodayPlans
+        : [createTodayOutfitPlan(1)].map((plan) => ({
+            ...plan,
+            outfit: generateOutfit(importedItems, plan.request)
+          }));
+    const initialPlannerRequest = defaultPlannerRequest();
+    const savedPlanner = importedOutfitDays.find((day) => day.id === initialPlannerRequest.eventDate)?.plannerPlan;
+    const importedPlanner = savedPlanner
+      ? restorePlannerPlan(savedPlanner, importedItems, initialPlannerRequest)
+      : {
+          request: initialPlannerRequest,
+          locks: {},
+          outfit: generateOutfit(importedItems, initialPlannerRequest)
+        };
+    setItems(importedItems);
+    setWearLogs(importedWearLogs);
+    setOutfitDays(importedOutfitDays);
+    setTodayOutfits(importedTodayPlans);
+    setRequest(importedPlanner.request);
+    setOutfitLocks(importedPlanner.locks);
+    setGeneratedOutfit(importedPlanner.outfit);
     setWeatherCache({ ...emptyWeatherCache, ...(payload.weatherCache ?? {}) });
     if (payload.settings) setSettings(normalizeSettings({ ...payload.settings, id: "main" }));
     showToast("Import complete");
@@ -1383,6 +1586,16 @@ function App() {
                 allItems={items}
               />
             ) : null}
+            {view === "calendar" ? (
+              <CalendarView
+                wearLogs={wearLogs}
+                outfitDays={outfitDays}
+                items={items}
+                todayOutfits={todayOutfits}
+                onOpenPlanner={openPlannerForDate}
+                onOpenToday={() => setView("dashboard")}
+              />
+            ) : null}
             {view === "insights" ? (
               <InsightsView analytics={analytics} setFilters={setFilters} setQuery={setQuery} setView={setView} />
             ) : null}
@@ -1420,6 +1633,7 @@ function App() {
                 plannedEventLocation={plannerEventLocation}
                 eventForecastStatus={eventForecastStatus}
                 onFindEventForecast={() => applyEventForecast(request, "planner")}
+                onSavePlan={savePlannerPlan}
               />
             ) : null}
             {view === "capture" ? (
@@ -1469,6 +1683,7 @@ function Sidebar({
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const nav = [
     { id: "dashboard", label: "Today", icon: CloudSun },
+    { id: "calendar", label: "Calendar", icon: CalendarDays },
     { id: "planner", label: "Planner", icon: Wand2 },
     { id: "inventory", label: "Inventory", icon: Database },
     { id: "capture", label: "Add item", icon: ImagePlus },
@@ -1716,6 +1931,7 @@ function TodayOutfitCard({
       <OutfitBoard
         selections={plan.outfit?.selections ?? {}}
         alternatives={plan.outfit?.alternatives ?? {}}
+        sockRecommendation={recommendSocks(plan.outfit?.selections, plan.request)}
         allItems={allItems}
         onChooseItem={(slot, itemId, options) => onChooseItem(plan.id, slot, itemId, options)}
         onChangeItem={(slot, itemIndex, itemId) => onChangeItem(plan.id, slot, itemIndex, itemId)}
@@ -1739,6 +1955,228 @@ function TodayOutfitCard({
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+const calendarWeekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function formatCalendarDate(value) {
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric"
+  }).format(new Date(`${value}T12:00:00`));
+}
+
+function formatMonthLabel(date) {
+  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(date);
+}
+
+function selectionsFromEntries(entries) {
+  return entries.reduce((selections, [slot, item]) => {
+    selections[slot] = [...(selections[slot] ?? []), item];
+    return selections;
+  }, {});
+}
+
+function CalendarOutfitSummary({ label, entries, request, status, timestamp }) {
+  const selections = selectionsFromEntries(entries);
+  const socks = request ? recommendSocks(selections, request) : null;
+  const detail =
+    status === "Worn" && timestamp
+      ? new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(timestamp))
+      : request
+        ? `${labelFor(request.outfitCategory)} · ${labelFor(request.exposure ?? "mixed")}`
+        : "Wear record";
+
+  return (
+    <section className="calendar-outfit-summary">
+      <div className="calendar-outfit-heading">
+        <div>
+          <strong>{label}</strong>
+          <span>{detail}</span>
+        </div>
+        <StatusChip tone={status === "Worn" ? "success" : "info"}>{status}</StatusChip>
+      </div>
+      <div className="calendar-outfit-items">
+        {entries.map(([slot, item, index = 0]) => (
+          <div key={`${slot}-${item.id}-${index}`}>
+            <ItemVisual item={item} size="sm" />
+            <span>
+              <small>{index ? `${plannerSlotLabels[slot] ?? slot} ${index + 1}` : plannerSlotLabels[slot] ?? slot}</small>
+              <strong>{item.name}</strong>
+              <em>{item.color || "Color n/a"}</em>
+            </span>
+          </div>
+        ))}
+        {socks ? (
+          <div>
+            <SockIcon recommendation={socks} />
+            <span>
+              <small>Socks</small>
+              <strong>{socks.name}</strong>
+              <em>{socks.reason}</em>
+            </span>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner, onOpenToday }) {
+  const [selectedDate, setSelectedDate] = useState(todayIso());
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const today = parseDate(todayIso());
+    return new Date(today.getFullYear(), today.getMonth(), 1, 12);
+  });
+  const dates = monthDates(visibleMonth);
+  const daysByDate = new Map(outfitDays.map((day) => [day.date, day]));
+  const wornDates = new Set(wearLogs.map((log) => log.wornDate).filter(Boolean));
+  const plannedDates = new Set(
+    outfitDays
+      .filter((day) => day.plannerPlan || day.todayPlans?.some((plan) => plan.lastWornDate !== day.date))
+      .map((day) => day.date)
+  );
+  const selectedRecord = daysByDate.get(selectedDate);
+  const wornOutfits = wearOutfitsForDate(wearLogs, selectedDate, items);
+  const savedTodayPlans =
+    selectedDate === todayIso()
+      ? todayOutfits.map((plan) => ({
+          ...plan,
+          entries: outfitEntries(plan.outfit?.selections)
+        }))
+      : (selectedRecord?.todayPlans ?? []).map((plan) => ({
+          ...plan,
+          entries: outfitEntries(resolveSavedSelections(plan, items))
+        }));
+  const unwornDayPlans = savedTodayPlans.filter((plan) => plan.lastWornDate !== selectedDate && plan.entries.length);
+  const plannerPlan = selectedRecord?.plannerPlan;
+  const plannerEntries = plannerPlan ? outfitEntries(resolveSavedSelections(plannerPlan, items)) : [];
+  const isToday = selectedDate === todayIso();
+  const isFuture = selectedDate > todayIso();
+
+  function moveMonth(offset) {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1, 12));
+  }
+
+  function chooseDate(date) {
+    setSelectedDate(date);
+    const parsed = parseDate(date);
+    if (parsed.getMonth() !== visibleMonth.getMonth() || parsed.getFullYear() !== visibleMonth.getFullYear()) {
+      setVisibleMonth(new Date(parsed.getFullYear(), parsed.getMonth(), 1, 12));
+    }
+  }
+
+  return (
+    <section className="calendar-layout" {...componentMeta("CalendarView")}>
+      <section className="panel calendar-panel" aria-label="Outfit calendar">
+        <div className="calendar-toolbar">
+          <button className="icon-only-button" type="button" aria-label="Previous month" onClick={() => moveMonth(-1)}>
+            <ChevronLeft size={18} aria-hidden="true" />
+          </button>
+          <h1>{formatMonthLabel(visibleMonth)}</h1>
+          <button className="icon-only-button" type="button" aria-label="Next month" onClick={() => moveMonth(1)}>
+            <ChevronRight size={18} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="calendar-weekdays" aria-hidden="true">
+          {calendarWeekdays.map((day) => <span key={day}>{day}</span>)}
+        </div>
+        <div className="calendar-days">
+          {dates.map((day) => {
+            const worn = wornDates.has(day.date);
+            const planned = plannedDates.has(day.date);
+            const className = [
+              "calendar-day",
+              day.inMonth ? "" : "outside-month",
+              day.date === selectedDate ? "selected" : "",
+              day.date === todayIso() ? "today" : ""
+            ].filter(Boolean).join(" ");
+            return (
+              <button
+                className={className}
+                type="button"
+                key={day.date}
+                aria-pressed={day.date === selectedDate}
+                aria-label={`${formatCalendarDate(day.date)}${worn ? ", worn" : ""}${planned ? ", planned" : ""}`}
+                onClick={() => chooseDate(day.date)}
+              >
+                <time dateTime={day.date}>{day.day}</time>
+                <span className="calendar-day-status">
+                  {worn ? <small className="worn">Worn</small> : null}
+                  {planned ? <small className="planned">Plan</small> : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="panel calendar-detail" aria-live="polite">
+        <div className="panel-header">
+          <div>
+            <h1>{formatCalendarDate(selectedDate)}</h1>
+            <span className="panel-subtitle">
+              {wornOutfits.length ? `${wornOutfits.length} worn outfit${wornOutfits.length === 1 ? "" : "s"}` : isFuture ? "Future plan" : "No wear logged"}
+            </span>
+          </div>
+          {isToday ? (
+            <button className="secondary-button" type="button" onClick={onOpenToday}>
+              <CloudSun size={16} aria-hidden="true" />
+              Open Today
+            </button>
+          ) : isFuture ? (
+            <button className="primary-button" type="button" onClick={() => onOpenPlanner(selectedDate)}>
+              <Wand2 size={16} aria-hidden="true" />
+              {plannerPlan ? "Open in Planner" : "Plan this day"}
+            </button>
+          ) : null}
+        </div>
+
+        <div className="calendar-detail-body">
+          {wornOutfits.map((outfit) => (
+            <CalendarOutfitSummary
+              key={outfit.id}
+              label={outfit.label}
+              entries={outfit.entries.map((entry, index, entries) => [
+                entry.slot,
+                entry.item,
+                entries.slice(0, index).filter((candidate) => candidate.slot === entry.slot).length
+              ])}
+              request={outfit.request}
+              status="Worn"
+              timestamp={outfit.wornAt}
+            />
+          ))}
+          {plannerEntries.length ? (
+            <CalendarOutfitSummary
+              label="Planned outfit"
+              entries={plannerEntries}
+              request={plannerPlan.request}
+              status="Planned"
+            />
+          ) : null}
+          {unwornDayPlans.map((plan) => (
+            <CalendarOutfitSummary
+              key={plan.id}
+              label={plan.label}
+              entries={plan.entries}
+              request={plan.request}
+              status="Planned"
+            />
+          ))}
+          {!wornOutfits.length && !plannerEntries.length && !unwornDayPlans.length ? (
+            <div className="calendar-empty">
+              <CalendarDays size={24} aria-hidden="true" />
+              <strong>{isFuture ? "No outfit planned" : "Nothing recorded"}</strong>
+              <span>{isFuture ? "Open this date in Planner to build and save an outfit." : "No outfit was logged for this date."}</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
     </section>
   );
 }
@@ -2075,7 +2513,7 @@ function BrandCoverageList({ rows }) {
 
   return (
     <div className="brand-coverage-list">
-      {rows.slice(0, 8).map((row) => (
+      {rows.map((row) => (
         <div key={row.label}>
           <strong>{brandLabel(row.label)}</strong>
           <span>{row.count} items</span>
@@ -2906,7 +3344,8 @@ function PlannerView({
   plannedEventLocation,
   surface = "planner",
   eventForecastStatus,
-  onFindEventForecast
+  onFindEventForecast,
+  onSavePlan
 }) {
   const selectedItems = outfitEntries(outfit?.selections);
   const updateRequest = onUpdateRequest ?? setRequest;
@@ -2941,9 +3380,13 @@ function PlannerView({
               <Shuffle size={16} aria-hidden="true" />
               Regenerate outfit
             </button>
-            <button className="primary-button" onClick={onFindEventForecast} type="button" disabled={eventForecastStatus?.state === "loading"}>
+            <button className="secondary-button" onClick={onFindEventForecast} type="button" disabled={eventForecastStatus?.state === "loading"}>
               <CloudSun size={16} aria-hidden="true" />
               {eventForecastStatus?.state === "loading" ? "Checking" : "Get forecast"}
+            </button>
+            <button className="primary-button" onClick={onSavePlan} type="button">
+              <CalendarDays size={16} aria-hidden="true" />
+              Save plan
             </button>
           </div>
         </div>
@@ -3060,6 +3503,7 @@ function PlannerView({
         <OutfitBoard
           selections={outfit?.selections ?? {}}
           alternatives={outfit?.alternatives ?? {}}
+          sockRecommendation={recommendSocks(outfit?.selections, request)}
           allItems={allItems}
           onChooseItem={onChooseItem}
           onChangeItem={onChangeItem}
@@ -3218,9 +3662,24 @@ function SelectWithCustom({ label, value, onChange, options }) {
   );
 }
 
+function SockIcon({ recommendation }) {
+  const tall = recommendation?.length === "tall";
+  return (
+    <div className="sock-icon" style={{ "--sock-color": recommendation?.swatch ?? "#858b90" }} aria-hidden="true">
+      <svg viewBox="0 0 48 48" focusable="false">
+        <path
+          d={tall ? "M13 5h18v19c0 4 2 6 6 7l7 3v7H29c-10 0-16-6-16-16Z" : "M13 16h18v8c0 4 2 6 6 7l7 3v7H29c-10 0-16-6-16-16Z"}
+        />
+        <path d={tall ? "M14 10h16" : "M14 21h16"} className="sock-cuff" />
+      </svg>
+    </div>
+  );
+}
+
 function OutfitBoard({
   selections,
   alternatives = {},
+  sockRecommendation,
   allItems = [],
   onChooseItem,
   onChangeItem,
@@ -3341,6 +3800,22 @@ function OutfitBoard({
           </div>
         );
       })}
+      <div className="outfit-slot slot-socks">
+        <span>Socks</span>
+        {sockRecommendation ? (
+          <div className="sock-recommendation" aria-label={`Sock recommendation: ${sockRecommendation.name}`}>
+            <SockIcon recommendation={sockRecommendation} />
+            <div>
+              <strong>{sockRecommendation.name}</strong>
+              <small>{sockRecommendation.reason}</small>
+            </div>
+          </div>
+        ) : (
+          <div className="outfit-slot-empty">
+            <em>Add shoes to get a sock match.</em>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

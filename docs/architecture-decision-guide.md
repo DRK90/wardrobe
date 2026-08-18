@@ -25,8 +25,8 @@ storage, payment integration, or AI provider integration.
 
 ### D1: Local First Is The Default
 
-Decision: Inventory, settings, wear logs, weather cache, and images are stored
-on the user's device first.
+Decision: Inventory, settings, daily outfit plans, wear logs, weather cache, and
+images are stored on the user's device first.
 
 Rationale:
 
@@ -98,6 +98,7 @@ Current local stores:
 - `items`: clothing inventory.
 - `settings`: local app and weather preferences.
 - `wearLogs`: local wear history.
+- `outfitDays`: saved Today outfits and future outfit plans by calendar date.
 - `weatherCache`: cached forecast payloads.
 
 Future sync models may mirror these concepts, but the current public app has no
