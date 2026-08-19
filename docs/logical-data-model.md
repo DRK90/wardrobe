@@ -61,7 +61,10 @@ id uuid primary key
 user_id uuid not null
 category text not null
 subcategory text nullable
+outfit_slot text nullable
 item_type text nullable
+sleeve_length text nullable
+bottom_length text nullable
 nickname text nullable
 brand text nullable
 product_line text nullable
@@ -95,6 +98,9 @@ Suggested enum values:
 ```text
 category: top, bottom, dress, suit, outerwear, underwear, socks, shoes,
           accessory, athletic, sleepwear, swimwear, formalwear, other
+outfit_slot: top, bottom, outerwear, shoes, accessory
+sleeve_length: sleeveless, short, three_quarter, long
+bottom_length: short, knee, cropped, full
 status: active, archived, donated, sold, lost, discarded
 acquisition_type: purchased_new, purchased_used, gift, rental, inherited, other
 ```

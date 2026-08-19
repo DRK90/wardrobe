@@ -1,13 +1,6 @@
 import { slotOrder } from "./data.js";
-import { effectiveWeatherForExposure, itemWeatherFit } from "./clothingMeta.js";
-
-const slotMatches = {
-  outerwear: ["outerwear", "suit"],
-  top: ["top", "dress"],
-  bottom: ["bottom"],
-  shoes: ["shoes"],
-  accessory: ["accessory", "socks"]
-};
+import { coverageWeatherFit, effectiveWeatherForExposure, itemWeatherFit } from "./clothingMeta.js";
+import { resolvedOutfitSlot } from "./garmentTaxonomy.js";
 
 const selectionOrder = ["top", "bottom", "shoes", "outerwear", "accessory"];
 const neutralColorWords = /black|white|gray|grey|charcoal|navy|denim|stone|taupe|cream|ivory|tan|khaki|brown|camel|beige/i;
@@ -34,16 +27,8 @@ const sockColorPreferences = {
   other: { charcoal: 7, gray: 6, navy: 6, black: 4 }
 };
 
-function athleticSlot(item, slot) {
-  if (item.category !== "athletic") return false;
-  const subcategory = String(item.subcategory || "").toLowerCase();
-  if (slot === "top") return /hoodie|shirt|tee|polo|top|base/.test(subcategory);
-  if (slot === "bottom") return /short|pant|tight|legging|jogger/.test(subcategory);
-  return false;
-}
-
 export function matchesOutfitSlot(item, slot) {
-  return slotMatches[slot]?.includes(item.category) || athleticSlot(item, slot);
+  return resolvedOutfitSlot(item) === slot;
 }
 
 function clamp(value, min, max) {
@@ -160,13 +145,12 @@ function sockColorFamily(item) {
 }
 
 function sockLengthFor(bottom, shoes, request, weather) {
-  const shoeText = `${shoes?.name ?? ""} ${shoes?.subcategory ?? ""} ${shoes?.material ?? ""}`.toLowerCase();
-  const bottomText = `${bottom?.name ?? ""} ${bottom?.subcategory ?? ""}`.toLowerCase();
+  const shoeText = `${shoes?.name ?? ""} ${shoes?.itemType ?? ""} ${shoes?.subcategory ?? ""} ${shoes?.material ?? ""}`.toLowerCase();
   const formalPlan = ["formal", "professional"].includes(request.outfitCategory);
   const dressShoe = /oxford|derby|loafer|monk|dress|calf|full-grain|leather/.test(shoeText);
   const boot = /boot/.test(shoeText);
   const athleticShoe = /runner|running|sneaker|trainer|athletic|trail|mesh/.test(shoeText);
-  const shorts = /short/.test(bottomText);
+  const shorts = bottom?.bottomLength === "short";
   let tallScore = 0;
   let shortScore = 0;
 
@@ -187,8 +171,7 @@ function sockLengthFor(bottom, shoes, request, weather) {
 }
 
 function sockColorFor(bottom, shoes, request, length) {
-  const bottomText = `${bottom?.name ?? ""} ${bottom?.subcategory ?? ""}`.toLowerCase();
-  const bottomIsShort = /short/.test(bottomText);
+  const bottomIsShort = bottom?.bottomLength === "short";
   const bottomFamily = sockColorFamily(bottom);
   const shoeFamily = sockColorFamily(shoes);
 
@@ -220,9 +203,8 @@ export function recommendSocks(selections, request) {
   const weather = effectiveWeatherForExposure(request);
   const length = sockLengthFor(bottom, shoes, request, weather);
   const color = sockColorFor(bottom, shoes, request, length);
-  const shoeText = `${shoes.name ?? ""} ${shoes.subcategory ?? ""}`.toLowerCase();
-  const bottomText = `${bottom?.name ?? ""} ${bottom?.subcategory ?? ""}`.toLowerCase();
-  const bottomIsShort = /short/.test(bottomText);
+  const shoeText = `${shoes.name ?? ""} ${shoes.itemType ?? ""} ${shoes.subcategory ?? ""}`.toLowerCase();
+  const bottomIsShort = bottom?.bottomLength === "short";
   const lengthReason =
     length === "short"
       ? bottomIsShort
@@ -280,7 +262,7 @@ function colorHarmonyScore(item, selections) {
 }
 
 function materialProfile(item) {
-  const text = `${item.material ?? ""} ${item.fabric ?? ""} ${item.subcategory ?? ""}`.toLowerCase();
+  const text = `${item.material ?? ""} ${item.fabric ?? ""} ${item.itemType ?? ""} ${item.subcategory ?? ""}`.toLowerCase();
   return {
     formal: /worsted|cashmere|silk|satin|oxford|poplin|dress|calf|full-grain|suede|leather/.test(text),
     rugged: /denim|canvas|flannel|corduroy|waxed|workwear/.test(text),
@@ -376,6 +358,7 @@ function styleCompatibilityScore(item, slot, request, selections) {
 
 function layerCompatibilityScore(item, slot, request, selections) {
   const weather = effectiveWeatherForExposure(request);
+  const coverageFit = coverageWeatherFit(item, request);
   const exposure = weather.exposure ?? "mixed";
   const role = String(item.layerRole ?? "").toLowerCase();
   const warmth = Number(item.warmth ?? 3);
@@ -420,7 +403,7 @@ function layerCompatibilityScore(item, slot, request, selections) {
     if (weather.rainPct >= 50 && (item.rain ?? 0) >= 2) score += 3;
   }
 
-  return score * weather.weatherWeight;
+  return score * weather.weatherWeight + coverageFit.adjustment * 0.8;
 }
 
 function targetWarmth(tempF) {

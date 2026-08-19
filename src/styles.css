@@ -959,6 +959,98 @@ textarea {
   grid-template-columns: repeat(3, minmax(220px, 1fr));
 }
 
+.coverage-matrix-panel {
+  overflow: hidden;
+}
+
+.coverage-matrix-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.coverage-matrix-group {
+  min-width: 0;
+  padding: var(--space-4);
+}
+
+.coverage-matrix-group + .coverage-matrix-group {
+  border-left: 1px solid var(--color-line);
+}
+
+.coverage-matrix-heading {
+  margin-bottom: var(--space-3);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.coverage-matrix-heading h2 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.coverage-matrix-heading strong {
+  color: var(--color-muted);
+  font-size: 0.74rem;
+}
+
+.coverage-matrix-scroll {
+  overflow-x: auto;
+}
+
+.coverage-matrix-table {
+  width: 100%;
+  min-width: 460px;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+
+.coverage-matrix-table th,
+.coverage-matrix-table td {
+  height: 36px;
+  border-bottom: 1px solid var(--color-line);
+  padding: var(--space-1) var(--space-2);
+  text-align: center;
+}
+
+.coverage-matrix-table th:first-child {
+  min-width: 130px;
+  text-align: left;
+}
+
+.coverage-matrix-table thead th {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.coverage-matrix-table tbody th {
+  font-weight: 750;
+}
+
+.coverage-matrix-table button {
+  width: 30px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--color-panel-strong);
+  color: var(--color-primary-strong);
+  font: inherit;
+  font-weight: 850;
+}
+
+.coverage-matrix-table button:not(:disabled):hover {
+  background: var(--color-primary);
+  color: white;
+}
+
+.coverage-matrix-table button:disabled {
+  background: transparent;
+  color: var(--color-muted);
+  cursor: default;
+  opacity: 0.65;
+}
+
 .mini-panel {
   padding: var(--space-4);
   display: grid;
@@ -1172,7 +1264,7 @@ textarea {
 
 .data-table {
   width: 100%;
-  min-width: 1280px;
+  min-width: 1540px;
   border-collapse: collapse;
 }
 
@@ -2423,6 +2515,7 @@ meter {
 
   .dashboard-grid,
   .dashboard-grid.two,
+  .coverage-matrix-layout,
   .planner-schedule-controls,
   .outfit-preference-controls,
   .settings-list,
@@ -2434,6 +2527,11 @@ meter {
   .weather-secondary,
   .zip-form {
     grid-template-columns: 1fr;
+  }
+
+  .coverage-matrix-group + .coverage-matrix-group {
+    border-top: 1px solid var(--color-line);
+    border-left: 0;
   }
 
   input,

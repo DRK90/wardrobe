@@ -1,3 +1,5 @@
+import { resolvedOutfitSlot } from "./garmentTaxonomy.js";
+
 export const exposureOptions = [
   { value: "indoor", label: "Indoor" },
   { value: "mixed", label: "Mixed" },
@@ -21,7 +23,7 @@ const weatherMaterials = [
 ];
 
 function materialText(item) {
-  return `${item.material ?? ""} ${item.fabric ?? ""} ${item.subcategory ?? ""}`.toLowerCase();
+  return `${item.material ?? ""} ${item.fabric ?? ""} ${item.itemType ?? ""} ${item.subcategory ?? ""}`.toLowerCase();
 }
 
 function materialBoost(item, target) {
@@ -95,6 +97,98 @@ export function inferWeatherProfile(item) {
   };
 }
 
+export function coverageWeatherFit(item, request) {
+  const weather = effectiveWeatherForExposure(request);
+  const slot = resolvedOutfitSlot(item);
+  const coverage = slot === "bottom" ? item.bottomLength : item.sleeveLength;
+  if (!coverage || !["top", "bottom", "outerwear"].includes(slot)) {
+    return { adjustment: 0, strengths: [], cautions: [] };
+  }
+
+  const warmth = Number(item.warmth ?? 3);
+  const breathability = Number(item.breathability ?? 3);
+  const lightweightAndBreathable = warmth <= 2 && breathability >= 4;
+  const strengths = [];
+  const cautions = [];
+  let adjustment = 0;
+
+  if (weather.tempF >= 82) {
+    if (slot === "bottom") {
+      if (coverage === "short") {
+        adjustment += 10;
+        strengths.push("shorts suit the heat");
+      } else if (coverage === "knee") {
+        adjustment += 7;
+        strengths.push("light leg coverage");
+      } else if (coverage === "cropped") {
+        adjustment += 3;
+        strengths.push("cropped for warmth");
+      } else if (coverage === "full" && lightweightAndBreathable) {
+        adjustment += 2;
+        strengths.push("breathable full coverage");
+      } else if (coverage === "full") {
+        adjustment -= 9;
+        cautions.push("full length in heat");
+      }
+    } else if (["sleeveless", "short"].includes(coverage)) {
+      adjustment += 9;
+      strengths.push(coverage === "sleeveless" ? "sleeveless for heat" : "short sleeves suit the heat");
+    } else if (coverage === "three_quarter") {
+      adjustment += 3;
+      strengths.push("moderate sleeve coverage");
+    } else if (coverage === "long" && lightweightAndBreathable) {
+      adjustment += 2;
+      strengths.push("breathable long sleeves");
+    } else if (coverage === "long") {
+      adjustment -= 9;
+      cautions.push("long sleeves in heat");
+    }
+  }
+
+  if (weather.tempF <= 45) {
+    if (slot === "bottom") {
+      if (coverage === "full") {
+        adjustment += 9;
+        strengths.push("full coverage for cold");
+      } else if (coverage === "cropped") {
+        adjustment -= 3;
+        cautions.push("limited ankle coverage");
+      } else if (coverage === "knee") {
+        adjustment -= 7;
+        cautions.push("limited leg coverage");
+      } else if (coverage === "short") {
+        adjustment -= 11;
+        cautions.push("shorts expose legs to cold");
+      }
+    } else if (coverage === "long") {
+      adjustment += 8;
+      strengths.push("long sleeves for cold");
+    } else if (coverage === "three_quarter") {
+      adjustment += 1;
+      cautions.push("partial arm coverage");
+    } else if (coverage === "short") {
+      adjustment -= 8;
+      cautions.push("short sleeves expose arms");
+    } else if (coverage === "sleeveless") {
+      adjustment -= 11;
+      cautions.push("limited arm coverage");
+    }
+  }
+
+  if (weather.exposure === "outdoor" && weather.tempF > 45 && weather.tempF < 82 && weather.windMph >= 16) {
+    const fullCoverage = coverage === "long" || coverage === "full";
+    adjustment += fullCoverage ? 2 : -2;
+    if (fullCoverage) strengths.push("coverage for wind");
+    else cautions.push("exposed in wind");
+  }
+
+  return {
+    adjustment: adjustment * weather.weatherWeight,
+    strengths: [...new Set(strengths)],
+    cautions: [...new Set(cautions)]
+  };
+}
+
 export function itemWeatherFit(item, request) {
   const weather = effectiveWeatherForExposure(request);
   const profile = inferWeatherProfile(item);
@@ -106,10 +200,13 @@ export function itemWeatherFit(item, request) {
   let score = 76 - warmthGap * 4.5 * weather.weatherWeight;
   const strengths = [];
   const cautions = [];
+  const coverageFit = coverageWeatherFit(item, request);
 
   if (warmthGap <= 1) strengths.push("right warmth");
   else if (warmth > targetWarmth(weather.tempF)) cautions.push("warmer than needed");
   else cautions.push("lighter than forecast");
+  strengths.push(...coverageFit.strengths);
+  cautions.push(...coverageFit.cautions);
 
   if (weather.tempF >= 82) {
     if (profile.scores.hot >= 7 && breathability >= 4 && warmth <= 2) {
@@ -172,6 +269,8 @@ export function itemWeatherFit(item, request) {
     score += 3;
     strengths.push("mixed plan");
   }
+
+  score += coverageFit.adjustment;
 
   const normalized = Math.max(0, Math.min(100, Math.round(score)));
   return {

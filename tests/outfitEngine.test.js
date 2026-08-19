@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { starterItems } from "../src/data.js";
-import { generateOutfit } from "../src/outfitEngine.js";
+import { itemWeatherFit } from "../src/clothingMeta.js";
+import { generateOutfit, matchesOutfitSlot } from "../src/outfitEngine.js";
 
 const request = {
   outfitCategory: "daily",
@@ -162,6 +163,7 @@ test("formal trousers receive a tall sock recommendation coordinated to the bott
     item({
       id: "navy-trouser",
       category: "bottom",
+      bottomLength: "full",
       subcategory: "dress trouser",
       color: "Navy",
       swatch: "#263a58",
@@ -200,6 +202,7 @@ test("hot athletic shorts receive short socks coordinated to the shoes", () => {
     item({
       id: "black-running-short",
       category: "bottom",
+      bottomLength: "short",
       subcategory: "running shorts",
       color: "Black",
       swatch: "#202326",
@@ -225,4 +228,60 @@ test("hot athletic shorts receive short socks coordinated to the shoes", () => {
 
   assert.equal(outfit.socks.id, "virtual-socks-short-white");
   assert.match(outfit.socks.reason, /short for shorts/i);
+});
+
+test("explicit outfit position classifies mixed clothing categories without parsing text", () => {
+  const athleticTop = item({
+    id: "athletic-layer",
+    category: "athletic",
+    outfitSlot: "top",
+    itemType: "performance_top",
+    subcategory: "",
+    sleeveLength: "long"
+  });
+
+  assert.equal(matchesOutfitSlot(athleticTop, "top"), true);
+  assert.equal(matchesOutfitSlot(athleticTop, "bottom"), false);
+});
+
+test("hot outdoor plans favor short sleeves over otherwise equal long sleeves", () => {
+  const hotRequest = { ...request, tempF: 92, exposure: "outdoor" };
+  const items = [
+    item({
+      id: "short-sleeve-top",
+      category: "top",
+      sleeveLength: "short",
+      warmth: 2,
+      breathability: 4
+    }),
+    item({
+      id: "long-sleeve-top",
+      category: "top",
+      sleeveLength: "long",
+      warmth: 2,
+      breathability: 4
+    }),
+    item({ id: "bottom-one", category: "bottom", bottomLength: "short" }),
+    item({ id: "shoes-one", category: "shoes" })
+  ];
+
+  const outfit = generateOutfit(items, hotRequest);
+
+  assert.equal(outfit.selections.top[0].id, "short-sleeve-top");
+  assert.ok(itemWeatherFit(items[1], hotRequest).score >= 70, "breathable long sleeves should remain viable");
+});
+
+test("cold outdoor plans favor full coverage", () => {
+  const coldRequest = { ...request, tempF: 34, exposure: "outdoor", season: "winter" };
+  const items = [
+    item({ id: "short-bottom", category: "bottom", bottomLength: "short", season: ["winter"] }),
+    item({ id: "full-bottom", category: "bottom", bottomLength: "full", season: ["winter"] }),
+    item({ id: "top-one", category: "top", sleeveLength: "long", season: ["winter"] }),
+    item({ id: "shoes-one", category: "shoes", season: ["winter"] })
+  ];
+
+  const outfit = generateOutfit(items, coldRequest);
+
+  assert.equal(outfit.selections.bottom[0].id, "full-bottom");
+  assert.match(itemWeatherFit(items[0], coldRequest).cautions.join(" "), /shorts expose legs/i);
 });

@@ -44,6 +44,18 @@ import { generateOutfit, matchesOutfitSlot, recommendSocks } from "./outfitEngin
 import { exposureOptions, inferWeatherProfile, itemWeatherFit } from "./clothingMeta.js";
 import { groupColorsBySwatch } from "./colorAnalytics.js";
 import {
+  bottomLengthOptions,
+  coverageFieldFor,
+  coverageFilterOptions,
+  coverageFilterValue,
+  coverageGroupFor,
+  coverageLabel,
+  itemTypeOptionsFor,
+  outfitSlotOptions,
+  resolvedOutfitSlot,
+  sleeveLengthOptions
+} from "./garmentTaxonomy.js";
+import {
   loadItems,
   loadOutfitDays,
   loadSettings,
@@ -124,6 +136,10 @@ function normalizeSettings(settings) {
 const newItemTemplate = {
   name: "",
   category: "top",
+  outfitSlot: "",
+  itemType: "",
+  sleeveLength: "",
+  bottomLength: "",
   subcategory: "",
   brand: "",
   size: "",
@@ -160,6 +176,9 @@ const starterItemIds = new Set(starterItems.map((item) => item.id));
 
 const filterDefaults = {
   category: "all",
+  coverageGroup: "all",
+  itemType: "",
+  coverage: "all",
   brand: "",
   season: "all",
   climate: "all",
@@ -313,6 +332,7 @@ function optionValue(option) {
 function freshItemTemplate() {
   return {
     ...newItemTemplate,
+    outfitSlot: "top",
     outfitTags: [...newItemTemplate.outfitTags],
     season: [...newItemTemplate.season],
     climate: [...newItemTemplate.climate],
@@ -586,6 +606,34 @@ function compareSwatches(a, b) {
   );
 }
 
+function coverageMatrix(items, slot, field, options) {
+  const slotItems = items.filter((item) => coverageGroupFor(item) === slot);
+  const rows = [
+    ...options.map((option) => ({ key: option.value, label: option.label })),
+    { key: "", label: "Not entered" }
+  ].map((row) => {
+    const matching = slotItems.filter((item) => (item[field] || "") === row.key);
+    const counts = Object.fromEntries(
+      [1, 2, 3, 4, 5].map((formality) => [
+        formality,
+        matching.filter((item) => Number(item.formality) === formality).length
+      ])
+    );
+    return {
+      ...row,
+      counts,
+      total: matching.length,
+      filterValue: row.key ? `${field}:${row.key}` : "missing"
+    };
+  });
+
+  return {
+    slot,
+    total: slotItems.length,
+    rows
+  };
+}
+
 function analyticsFor(items, wearLogs) {
   const active = items.filter((item) => item.status === "active");
   const totalValue = active.reduce((sum, item) => sum + Number(item.cost || 0), 0);
@@ -604,6 +652,10 @@ function analyticsFor(items, wearLogs) {
   );
   const byLaundry = [...groupTotals(active, "laundry").values()].sort((a, b) => b.count - a.count);
   const byFormality = [...groupTotals(active, "formality", "cost").values()].sort((a, b) => Number(a.label) - Number(b.label));
+  const coverage = {
+    tops: coverageMatrix(active, "top", "sleeveLength", sleeveLengthOptions),
+    bottoms: coverageMatrix(active, "bottom", "bottomLength", bottomLengthOptions)
+  };
   const colors = groupColorsBySwatch(active);
   const gaps = findWardrobeGaps(active);
   const careQueue = active
@@ -629,6 +681,7 @@ function analyticsFor(items, wearLogs) {
     byBrand,
     byLaundry,
     byFormality,
+    coverage,
     colors,
     gaps,
     careQueue
@@ -894,10 +947,30 @@ function App() {
     const filtered = items.filter((item) => {
       const queryMatch =
         !needle ||
-        [item.name, item.brand, item.color, item.material, item.subcategory, item.notes, item.storageLocation]
+        [
+          item.name,
+          item.brand,
+          item.color,
+          item.material,
+          item.itemType,
+          item.subcategory,
+          item.sleeveLength,
+          item.bottomLength,
+          item.notes,
+          item.storageLocation
+        ]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(needle));
       const categoryMatch = filters.category === "all" || item.category === filters.category;
+      const coverageGroupMatch = filters.coverageGroup === "all" || coverageGroupFor(item) === filters.coverageGroup;
+      const itemTypeMatch =
+        !filters.itemType || String(item.itemType ?? "").toLowerCase().includes(filters.itemType.toLowerCase());
+      const itemCoverage = coverageFilterValue(item);
+      const coverageMatch =
+        filters.coverage === "all" ||
+        (filters.coverage === "missing"
+          ? Boolean(coverageFieldFor(item)) && !itemCoverage
+          : itemCoverage === filters.coverage);
       const brandMatch = !filters.brand || String(item.brand ?? "").toLowerCase().includes(filters.brand.toLowerCase());
       const seasonMatch = filters.season === "all" || item.season?.includes(filters.season);
       const climateMatch = filters.climate === "all" || item.climate?.includes(filters.climate);
@@ -916,6 +989,9 @@ function App() {
       return (
         queryMatch &&
         categoryMatch &&
+        coverageGroupMatch &&
+        itemTypeMatch &&
+        coverageMatch &&
         brandMatch &&
         seasonMatch &&
         climateMatch &&
@@ -971,6 +1047,7 @@ function App() {
     if (key === "age") return ageMonths(item);
     if (key === "lastWorn") return daysSince(item.lastWorn);
     if (key === "costPerWear") return item.cost / Math.max(1, item.wears || 0);
+    if (key === "coverage") return coverageLabel(item);
     return item[key] ?? "";
   }
 
@@ -1483,7 +1560,7 @@ function App() {
     delete exportSettings.aiApiKey;
     const payload = {
       exportedAt: new Date().toISOString(),
-      version: 5,
+      version: 6,
       items,
       wearLogs,
       outfitDays,
@@ -2181,6 +2258,12 @@ function InsightsView({ analytics, setFilters, setQuery, setView }) {
   return (
     <section className="dashboard-stack" {...componentMeta("InsightsView")}>
       <ColorPalettePanel colors={analytics.colors} setFilters={setFilters} setQuery={setQuery} setView={setView} />
+      <CoverageMatrix
+        coverage={analytics.coverage}
+        setFilters={setFilters}
+        setQuery={setQuery}
+        setView={setView}
+      />
 
       <div className="dashboard-grid">
         <Panel title="Category value">
@@ -2504,6 +2587,80 @@ function BarList({ rows, valueKey }) {
   );
 }
 
+function CoverageMatrix({ coverage, setFilters, setQuery, setView }) {
+  function openInventory(coverageGroup, filterValue, formality = "all") {
+    setFilters({ ...filterDefaults, coverageGroup, coverage: filterValue, formality: String(formality) });
+    setQuery("");
+    setView("inventory");
+  }
+
+  function MatrixTable({ title, matrix, rowHeading }) {
+    return (
+      <section className="coverage-matrix-group" aria-label={`${title} by formality`}>
+        <div className="coverage-matrix-heading">
+          <h2>{title}</h2>
+          <strong>{matrix.total} total</strong>
+        </div>
+        <div className="coverage-matrix-scroll">
+          <table className="coverage-matrix-table">
+            <thead>
+              <tr>
+                <th>{rowHeading}</th>
+                {[1, 2, 3, 4, 5].map((formality) => <th key={formality}>F{formality}</th>)}
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.rows.map((row) => (
+                <tr key={row.label}>
+                  <th>{row.label}</th>
+                  {[1, 2, 3, 4, 5].map((formality) => (
+                    <td key={formality}>
+                      <button
+                        type="button"
+                        disabled={!row.counts[formality]}
+                        onClick={() => openInventory(matrix.slot, row.filterValue, formality)}
+                        aria-label={`${row.counts[formality]} ${title.toLowerCase()}, ${row.label.toLowerCase()}, formality ${formality}`}
+                      >
+                        {row.counts[formality]}
+                      </button>
+                    </td>
+                  ))}
+                  <td>
+                    <button
+                      type="button"
+                      disabled={!row.total}
+                      onClick={() => openInventory(matrix.slot, row.filterValue)}
+                      aria-label={`${row.total} ${title.toLowerCase()}, ${row.label.toLowerCase()}`}
+                    >
+                      {row.total}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="panel coverage-matrix-panel" {...componentMeta("CoverageMatrix")}>
+      <div className="panel-header">
+        <div>
+          <h1>Top and bottom coverage</h1>
+          <span className="panel-subtitle">Item counts by formality</span>
+        </div>
+      </div>
+      <div className="coverage-matrix-layout">
+        <MatrixTable title="Tops" matrix={coverage.tops} rowHeading="Sleeve" />
+        <MatrixTable title="Bottoms" matrix={coverage.bottoms} rowHeading="Length" />
+      </div>
+    </section>
+  );
+}
+
 function BrandCoverageList({ rows }) {
   if (!rows.length) return <p className="muted compact-text">No brands recorded.</p>;
 
@@ -2622,6 +2779,57 @@ function ImageFileButton({ label, icon: Icon = ImagePlus, capture = false, multi
         hidden
       />
     </label>
+  );
+}
+
+function GarmentStructureFields({ item, onChange }) {
+  const outfitSlot = resolvedOutfitSlot(item);
+  const hasFlexiblePosition = ["athletic", "underwear", "sleepwear", "swimwear"].includes(item.category);
+
+  function changeCategory(category) {
+    onChange("category", category);
+    const defaultSlot = resolvedOutfitSlot({ category });
+    if (defaultSlot) onChange("outfitSlot", defaultSlot);
+  }
+
+  return (
+    <>
+      <Select label="Category" value={item.category} onChange={changeCategory} options={categoryOptions} />
+      {hasFlexiblePosition ? (
+        <Select
+          label="Outfit position"
+          value={item.outfitSlot || outfitSlot}
+          onChange={(value) => onChange("outfitSlot", value)}
+          options={[{ value: "", label: "Select" }, ...outfitSlotOptions]}
+        />
+      ) : null}
+      <SelectWithCustom
+        label="Item type"
+        value={item.itemType}
+        onChange={(value) => onChange("itemType", value)}
+        options={itemTypeOptionsFor(item)}
+      />
+      {outfitSlot === "top" || outfitSlot === "outerwear" ? (
+        <Select
+          label="Sleeve length"
+          value={item.sleeveLength}
+          onChange={(value) => onChange("sleeveLength", value)}
+          options={[{ value: "", label: "Select" }, ...sleeveLengthOptions]}
+        />
+      ) : null}
+      {outfitSlot === "bottom" ? (
+        <Select
+          label="Bottom length"
+          value={item.bottomLength}
+          onChange={(value) => onChange("bottomLength", value)}
+          options={[{ value: "", label: "Select" }, ...bottomLengthOptions]}
+        />
+      ) : null}
+      <label>
+        Style details
+        <input value={item.subcategory} onChange={(event) => onChange("subcategory", event.target.value)} />
+      </label>
+    </>
   );
 }
 
@@ -2830,11 +3038,7 @@ function ItemDetailModal({ item, onSave, onClose }) {
                 Name
                 <input required value={draft.name} onChange={(event) => setField("name", event.target.value)} />
               </label>
-              <Select label="Category" value={draft.category} onChange={(value) => setField("category", value)} options={categoryOptions} />
-              <label>
-                Subcategory
-                <input value={draft.subcategory} onChange={(event) => setField("subcategory", event.target.value)} />
-              </label>
+              <GarmentStructureFields item={draft} onChange={setField} />
               <label>
                 Brand
                 <input value={draft.brand} onChange={(event) => setField("brand", event.target.value)} />
@@ -2982,6 +3186,8 @@ function InventoryView({
     ["name", "Item"],
     ["brand", "Brand"],
     ["category", "Category"],
+    ["itemType", "Type"],
+    ["coverage", "Coverage"],
     ["size", "Size"],
     ["material", "Material"],
     ["climate", "Weather"],
@@ -3035,6 +3241,16 @@ function InventoryView({
                 <select aria-label="Filter category" value={filters.category} onChange={(event) => updateFilter("category", event.target.value)}>
                   {["all", ...categoryOptions].map((option) => (
                     <option key={option} value={option}>{labelFor(option)}</option>
+                  ))}
+                </select>
+              </th>
+              <th>
+                <input aria-label="Filter item type" value={filters.itemType} onChange={(event) => updateFilter("itemType", event.target.value)} placeholder="Type" />
+              </th>
+              <th>
+                <select aria-label="Filter coverage" value={filters.coverage} onChange={(event) => updateFilter("coverage", event.target.value)}>
+                  {coverageFilterOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
               </th>
@@ -3106,6 +3322,8 @@ function InventoryView({
                   </td>
                   <td>{brandLabel(item.brand)}</td>
                   <td>{labelFor(item.category)}</td>
+                  <td>{item.itemType ? labelFor(item.itemType) : "n/a"}</td>
+                  <td>{coverageLabel(item)}</td>
                   <td>{item.size || "n/a"}</td>
                   <td>{item.material || "n/a"}</td>
                   <td>
@@ -3861,7 +4079,7 @@ function SlotPicker({ slot, title, query, setQuery, allItems, candidates, exclud
     .filter((item) => item.status === "active" && matchesOutfitSlot(item, slot) && !excluded.has(item.id))
     .filter((item) => {
       if (!normalizedQuery) return true;
-      return [item.name, item.brand, item.color, item.material, item.subcategory]
+      return [item.name, item.brand, item.color, item.material, item.itemType, item.subcategory]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedQuery));
     })
@@ -3976,11 +4194,7 @@ function CaptureView({ form, setForm, onSubmit }) {
             Name
             <input required value={form.name} onChange={(event) => setField("name", event.target.value)} />
           </label>
-          <Select label="Category" value={form.category} onChange={(value) => setField("category", value)} options={categoryOptions} />
-          <label>
-            Subcategory
-            <input value={form.subcategory} onChange={(event) => setField("subcategory", event.target.value)} />
-          </label>
+          <GarmentStructureFields item={form} onChange={setField} />
           <label>
             Brand
             <input value={form.brand} onChange={(event) => setField("brand", event.target.value)} />
