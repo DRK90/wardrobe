@@ -4,6 +4,7 @@ function list(value) {
 }
 
 const outfitSlotOrder = ["outerwear", "top", "bottom", "shoes", "accessory"];
+const calendarExcludedColorSlots = new Set(["shoes", "socks"]);
 
 function cloneLocks(locks = {}) {
   return Object.fromEntries(
@@ -44,6 +45,19 @@ export function resolveSavedSelections(snapshot, items) {
       .map(([slot, ids]) => [slot, list(ids).map((id) => itemsById.get(id)).filter(Boolean)])
       .filter(([, selected]) => selected.length)
   );
+}
+
+export function calendarOutfitColorGroups(entryGroups) {
+  return list(entryGroups)
+    .map((entries) =>
+      list(entries).flatMap((entry) => {
+        const slot = Array.isArray(entry) ? entry[0] : entry?.slot;
+        const item = Array.isArray(entry) ? entry[1] : entry?.item;
+        if (!item || calendarExcludedColorSlots.has(slot)) return [];
+        return [item.swatch || "#858b90"];
+      })
+    )
+    .filter((swatches) => swatches.length);
 }
 
 export function serializeTodayPlans(plans) {

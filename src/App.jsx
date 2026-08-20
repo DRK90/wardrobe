@@ -69,6 +69,7 @@ import {
 } from "./storage.js";
 import {
   availableSelectionIds,
+  calendarOutfitColorGroups,
   localDateIso,
   monthDates,
   resolveSavedSelections,
@@ -2106,6 +2107,7 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
     return new Date(today.getFullYear(), today.getMonth(), 1, 12);
   });
   const dates = monthDates(visibleMonth);
+  const today = todayIso();
   const daysByDate = new Map(outfitDays.map((day) => [day.date, day]));
   const wornDates = new Set(wearLogs.map((log) => log.wornDate).filter(Boolean));
   const plannedDates = new Set(
@@ -2116,7 +2118,7 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
   const selectedRecord = daysByDate.get(selectedDate);
   const wornOutfits = wearOutfitsForDate(wearLogs, selectedDate, items);
   const savedTodayPlans =
-    selectedDate === todayIso()
+    selectedDate === today
       ? todayOutfits.map((plan) => ({
           ...plan,
           entries: outfitEntries(plan.outfit?.selections)
@@ -2128,8 +2130,35 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
   const unwornDayPlans = savedTodayPlans.filter((plan) => plan.lastWornDate !== selectedDate && plan.entries.length);
   const plannerPlan = selectedRecord?.plannerPlan;
   const plannerEntries = plannerPlan ? outfitEntries(resolveSavedSelections(plannerPlan, items)) : [];
-  const isToday = selectedDate === todayIso();
-  const isFuture = selectedDate > todayIso();
+  const isToday = selectedDate === today;
+  const isFuture = selectedDate > today;
+
+  function colorGroupsForDate(date) {
+    const dayRecord = daysByDate.get(date);
+    const wornEntryGroups = wearOutfitsForDate(wearLogs, date, items).map((outfit) => outfit.entries);
+    const dayPlans =
+      date === today
+        ? todayOutfits.map((plan) => ({
+            ...plan,
+            entries: outfitEntries(plan.outfit?.selections)
+          }))
+        : (dayRecord?.todayPlans ?? []).map((plan) => ({
+            ...plan,
+            entries: outfitEntries(resolveSavedSelections(plan, items))
+          }));
+    const unwornEntryGroups = dayPlans
+      .filter((plan) => plan.lastWornDate !== date && plan.entries.length)
+      .map((plan) => plan.entries);
+    const savedPlannerEntries = dayRecord?.plannerPlan
+      ? outfitEntries(resolveSavedSelections(dayRecord.plannerPlan, items))
+      : [];
+
+    return calendarOutfitColorGroups([
+      ...wornEntryGroups,
+      ...(savedPlannerEntries.length ? [savedPlannerEntries] : []),
+      ...unwornEntryGroups
+    ]);
+  }
 
   function moveMonth(offset) {
     setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1, 12));
@@ -2162,11 +2191,12 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
           {dates.map((day) => {
             const worn = wornDates.has(day.date);
             const planned = plannedDates.has(day.date);
+            const colorGroups = colorGroupsForDate(day.date);
             const className = [
               "calendar-day",
               day.inMonth ? "" : "outside-month",
               day.date === selectedDate ? "selected" : "",
-              day.date === todayIso() ? "today" : ""
+              day.date === today ? "today" : ""
             ].filter(Boolean).join(" ");
             return (
               <button
@@ -2178,6 +2208,19 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
                 onClick={() => chooseDate(day.date)}
               >
                 <time dateTime={day.date}>{day.day}</time>
+                <span className="calendar-outfit-colors" aria-hidden="true">
+                  {colorGroups.map((swatches, outfitIndex) => (
+                    <span className="calendar-outfit-color-row" key={`${day.date}-outfit-${outfitIndex}`}>
+                      {swatches.map((swatch, itemIndex) => (
+                        <span
+                          className="calendar-outfit-color"
+                          key={`${day.date}-outfit-${outfitIndex}-item-${itemIndex}`}
+                          style={{ "--outfit-color": swatch }}
+                        />
+                      ))}
+                    </span>
+                  ))}
+                </span>
                 <span className="calendar-day-status">
                   {worn ? <small className="worn">Worn</small> : null}
                   {planned ? <small className="planned">Plan</small> : null}

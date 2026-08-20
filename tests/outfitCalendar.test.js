@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   availableSelectionIds,
+  calendarOutfitColorGroups,
   localDateIso,
   monthDates,
   resolveSavedSelections,
@@ -13,6 +14,40 @@ import {
 
 const top = { id: "top-1", name: "Navy shirt", color: "Navy", material: "Cotton", swatch: "#263a58" };
 const shoes = { id: "shoes-1", name: "Brown derbies", color: "Brown", material: "Leather", swatch: "#624537" };
+
+test("calendar color groups preserve outfits and exclude shoes and socks", () => {
+  const groups = calendarOutfitColorGroups([
+    [
+      ["top", top, 0],
+      ["bottom", { id: "bottom-1", swatch: "#a69b86" }, 0],
+      ["shoes", shoes, 0],
+      ["socks", { id: "socks-1", swatch: "#ffffff" }, 0]
+    ],
+    [
+      { slot: "outerwear", item: { id: "outerwear-1", swatch: "#47624c" } },
+      { slot: "top", item: { id: "top-2", swatch: "#e5ddd0" } },
+      { slot: "accessory", item: { id: "accessory-1", swatch: "#8a3552" } }
+    ]
+  ]);
+
+  assert.deepEqual(groups, [
+    ["#263a58", "#a69b86"],
+    ["#47624c", "#e5ddd0", "#8a3552"]
+  ]);
+});
+
+test("calendar color groups omit empty shoe-only outfits and retain one segment per article", () => {
+  const groups = calendarOutfitColorGroups([
+    [{ slot: "shoes", item: shoes }],
+    [
+      { slot: "top", item: top },
+      { slot: "top", item: { ...top, id: "top-2" } },
+      { slot: "bottom", item: { id: "bottom-1" } }
+    ]
+  ]);
+
+  assert.deepEqual(groups, [["#263a58", "#263a58", "#858b90"]]);
+});
 
 test("today plan serialization stores selected IDs without duplicating inventory objects", () => {
   const plans = serializeTodayPlans([

@@ -549,7 +549,7 @@ textarea {
 
 .calendar-day {
   min-width: 0;
-  height: 64px;
+  min-height: 74px;
   border: 0;
   border-right: 1px solid var(--color-line);
   border-bottom: 1px solid var(--color-line);
@@ -557,7 +557,9 @@ textarea {
   color: var(--color-ink);
   padding: 6px;
   display: grid;
-  align-content: space-between;
+  grid-template-rows: auto minmax(10px, 1fr) auto;
+  gap: 4px;
+  align-content: stretch;
   justify-items: start;
   text-align: left;
 }
@@ -593,6 +595,39 @@ textarea {
 .calendar-day time {
   font-size: 0.76rem;
   font-weight: 800;
+}
+
+.calendar-outfit-colors {
+  width: 100%;
+  min-height: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.calendar-outfit-color-row {
+  min-width: 0;
+  min-height: 4px;
+  flex: 1 1 0;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--color-ink), transparent 82%);
+  border-radius: 2px;
+}
+
+.calendar-outfit-color {
+  min-width: 0;
+  flex: 1 1 0;
+  background: var(--outfit-color);
+}
+
+.calendar-outfit-color + .calendar-outfit-color {
+  border-left: 1px solid color-mix(in oklch, var(--color-bg), transparent 45%);
+}
+
+.calendar-day.outside-month .calendar-outfit-colors {
+  opacity: 0.48;
 }
 
 .calendar-day-status {
@@ -2503,7 +2538,7 @@ meter {
   }
 
   .calendar-day {
-    height: 60px;
+    min-height: 70px;
     padding: var(--space-1);
   }
 
