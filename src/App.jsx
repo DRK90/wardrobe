@@ -2917,18 +2917,12 @@ function ColorPalettePanel({
   const legendEntries = sorted.flatMap((entry) =>
     entry.colors.map((color) => ({ swatch: entry.swatch, color }))
   );
-  const total = Math.max(1, sorted.reduce((sum, entry) => sum + entry.count, 0));
-  let cursor = 0;
-  const gradient = sorted.length
-    ? sorted
-        .map((entry) => {
-          const start = (cursor / total) * 100;
-          cursor += entry.count;
-          const end = (cursor / total) * 100;
-          return `${entry.swatch} ${start}% ${end}%`;
-        })
-        .join(", ")
-    : "var(--color-panel) 0 100%";
+  const gradient = buildPaletteGradient(sorted, (entry) => entry.count);
+  const targetGradient = buildPaletteGradient(targetPalette, (entry) => entry.rating);
+  const targetFormalities = formalitiesForSelection(selection);
+  const targetFormalityLabel = targetFormalities.length === formalityLevels.length
+    ? "F1-F5"
+    : targetFormalities.map((formality) => `F${formality}`).join(", ");
 
   return (
     <div className="panel color-panel">
@@ -2953,8 +2947,33 @@ function ColorPalettePanel({
         )) : <strong>All wardrobe</strong>}
       </div>
       <div className="color-pie-layout">
-        <div className="actual-palette-visual">
-          <div className="color-pie" style={{ "--pie": gradient }} aria-label="Wardrobe colors" />
+        <div className="palette-visual-summary">
+          <div className="palette-pie-comparison">
+            <figure className="palette-pie-figure">
+              <div
+                className="color-pie"
+                style={{ "--pie": gradient }}
+                role="img"
+                aria-label={`Owned color distribution across ${itemCount} item${itemCount === 1 ? "" : "s"}`}
+              />
+              <figcaption>
+                <strong>Owned</strong>
+                <span>{itemCount} item{itemCount === 1 ? "" : "s"}</span>
+              </figcaption>
+            </figure>
+            <figure className="palette-pie-figure">
+              <div
+                className="color-pie"
+                style={{ "--pie": targetGradient }}
+                role="img"
+                aria-label={`Target color distribution for ${targetFormalityLabel}`}
+              />
+              <figcaption>
+                <strong>Target</strong>
+                <span>{targetFormalityLabel}</span>
+              </figcaption>
+            </figure>
+          </div>
           {recommendation ? (
             <div className="color-recommendation">
               <span className="recommendation-swatch" style={{ "--swatch": recommendation.swatch }} />
@@ -2962,7 +2981,7 @@ function ColorPalettePanel({
                 <small>Recommended next color</small>
                 <strong>{recommendation.name}</strong>
                 <span>
-                  {recommendation.rating.toFixed(recommendation.rating % 1 ? 1 : 0)}/5 target · {recommendation.actualCount} owned here · {recommendation.compatibleCount} compatible pieces
+                  {recommendation.rating.toFixed(recommendation.rating % 1 ? 1 : 0)}/5 target · {recommendation.similarItemCount} similar color{recommendation.similarItemCount === 1 ? "" : "s"} here · {recommendation.compatibleCount} compatible pieces
                 </span>
               </div>
             </div>
@@ -2992,24 +3011,26 @@ function ColorPalettePanel({
           {!legendEntries.length ? <p className="muted compact-text">No colors in this selection.</p> : null}
         </div>
       </div>
-      <section className="target-palette-section" aria-label="Target palette">
-        <div className="target-palette-heading">
-          <h2>Target palette</h2>
-          <span>{formalitiesForSelection(selection).map((formality) => `F${formality}`).join(", ")}</span>
-        </div>
-        <div className="target-palette-grid">
-          {targetPalette.map((color) => (
-            <div key={color.id} className="target-color" style={{ "--swatch": color.swatch }}>
-              <span />
-              <strong>{color.name}</strong>
-              <small>{color.rating.toFixed(color.rating % 1 ? 1 : 0)}</small>
-            </div>
-          ))}
-          {!targetPalette.length ? <p className="muted compact-text">No target colors selected.</p> : null}
-        </div>
-      </section>
     </div>
   );
+}
+
+function buildPaletteGradient(entries, weightFor) {
+  const weighted = entries
+    .map((entry) => ({ entry, weight: Math.max(0, Number(weightFor(entry)) || 0) }))
+    .filter(({ weight }) => weight > 0);
+  const total = weighted.reduce((sum, { weight }) => sum + weight, 0);
+  if (!total) return "var(--color-panel) 0 100%";
+
+  let cursor = 0;
+  return weighted
+    .map(({ entry, weight }) => {
+      const start = (cursor / total) * 100;
+      cursor += weight;
+      const end = (cursor / total) * 100;
+      return `${entry.swatch} ${start}% ${end}%`;
+    })
+    .join(", ");
 }
 
 function ActionList({ rows }) {

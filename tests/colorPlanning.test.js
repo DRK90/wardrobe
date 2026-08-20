@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  colorSimilarity,
   defaultColorPreferences,
   filterItemsByMatrixSelection,
   formalitiesForSelection,
@@ -57,7 +58,7 @@ test("target palette and recommendation honor exclusions and preference ratings"
   assert.deepEqual(target.map((color) => color.id), ["red", "navy"]);
   assert.equal(recommendation.id, "navy");
   assert.equal(recommendation.rating, 5);
-  assert.equal(recommendation.actualCount, 0);
+  assert.ok(recommendation.actualCount < 0.02);
 });
 
 test("owned excluded colors are not miscounted as the nearest enabled target", () => {
@@ -70,5 +71,27 @@ test("owned excluded colors are not miscounted as the nearest enabled target", (
   const recommendation = recommendItemColor({ selectedItems: [redTop], allItems: [redTop], clauses, preferences });
 
   assert.equal(recommendation.id, "navy");
-  assert.equal(recommendation.actualCount, 0);
+  assert.ok(recommendation.actualCount < 0.02);
+});
+
+test("recommendation coverage follows swatch similarity instead of color names", () => {
+  let preferences = defaultColorPreferences();
+  targetColorOptions.forEach((color) => {
+    preferences = setColorPreference(preferences, 3, color.id, color.id === "navy" ? 5 : 0);
+  });
+  const clauses = [{ slot: "top", field: "sleeveLength", value: "long", formality: 3 }];
+  const nearNavy = {
+    id: "misnamed",
+    category: "top",
+    sleeveLength: "long",
+    formality: 3,
+    status: "active",
+    color: "Sunset orange",
+    swatch: "#2a3c5a"
+  };
+  const recommendation = recommendItemColor({ selectedItems: [nearNavy], allItems: [nearNavy], clauses, preferences });
+
+  assert.ok(colorSimilarity(nearNavy.swatch, "#293b59") > 0.99);
+  assert.ok(recommendation.actualCount > 0.99);
+  assert.equal(recommendation.similarItemCount, 1);
 });

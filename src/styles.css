@@ -1175,9 +1175,9 @@ textarea {
 .color-pie-layout {
   padding: var(--space-4);
   display: grid;
-  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: var(--space-4);
-  align-items: center;
+  align-items: start;
 }
 
 .color-pie {
@@ -1188,10 +1188,43 @@ textarea {
   background: conic-gradient(var(--pie));
 }
 
-.actual-palette-visual {
+.palette-visual-summary {
   min-width: 0;
   display: grid;
   gap: var(--space-3);
+}
+
+.palette-pie-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.palette-pie-figure {
+  min-width: 0;
+  margin: 0;
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+}
+
+.palette-pie-figure figcaption {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  text-align: center;
+}
+
+.palette-pie-figure figcaption strong {
+  font-size: 0.82rem;
+}
+
+.palette-pie-figure figcaption span {
+  color: var(--color-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
 }
 
 .palette-selection-bar {
@@ -1263,65 +1296,6 @@ textarea {
 
 .actual-palette-legend {
   align-content: start;
-}
-
-.target-palette-section {
-  border-top: 1px solid var(--color-line);
-  padding: var(--space-4);
-}
-
-.target-palette-heading {
-  margin-bottom: var(--space-3);
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.target-palette-heading h2 {
-  margin: 0;
-  font-size: 0.9rem;
-}
-
-.target-palette-heading span {
-  color: var(--color-muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-}
-
-.target-palette-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(116px, 1fr));
-  gap: var(--space-1) var(--space-3);
-}
-
-.target-color {
-  min-width: 0;
-  min-height: 32px;
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.target-color > span {
-  width: 18px;
-  height: 18px;
-  border: 1px solid var(--color-line);
-  border-radius: 50%;
-  background: var(--swatch);
-}
-
-.target-color strong,
-.target-color small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.72rem;
-}
-
-.target-color small {
-  color: var(--color-muted);
 }
 
 .palette-grid.compact {

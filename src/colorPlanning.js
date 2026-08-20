@@ -116,10 +116,15 @@ export function recommendItemColor({ selectedItems, allItems, clauses, preferenc
   );
   const profiles = new Map(targets.map((target) => [target.id, colorProfile(target.swatch)]));
   const actualCounts = Object.fromEntries(targets.map((target) => [target.id, 0]));
+  const similarItemCounts = Object.fromEntries(targets.map((target) => [target.id, 0]));
 
   selectedItems.forEach((item) => {
-    const nearest = nearestTargetColor(item.swatch, targetColorOptions);
-    if (nearest && Object.hasOwn(actualCounts, nearest.id)) actualCounts[nearest.id] += 1;
+    const itemProfile = colorProfile(item.swatch);
+    targets.forEach((target) => {
+      const similarity = profileSimilarity(itemProfile, profiles.get(target.id));
+      actualCounts[target.id] += similarity;
+      if (similarity >= 0.7) similarItemCounts[target.id] += 1;
+    });
   });
 
   const totalTargetWeight = targets.reduce((sum, target) => sum + target.rating, 0) || 1;
@@ -139,6 +144,7 @@ export function recommendItemColor({ selectedItems, allItems, clauses, preferenc
       ...target,
       score,
       actualCount: actualCounts[target.id],
+      similarItemCount: similarItemCounts[target.id],
       compatibleCount,
       formalityLevels: formalities
     };
@@ -159,6 +165,10 @@ export function nearestTargetColor(swatch, targets = targetColorOptions) {
   return [...targets].sort(
     (first, second) => colorDistance(profile, colorProfile(first.swatch)) - colorDistance(profile, colorProfile(second.swatch))
   )[0];
+}
+
+export function colorSimilarity(firstSwatch, secondSwatch) {
+  return profileSimilarity(colorProfile(firstSwatch), colorProfile(secondSwatch));
 }
 
 export function colorProfile(swatch) {
@@ -205,6 +215,12 @@ function colorDistance(first, second) {
       (first.a - second.a) ** 2 +
       (first.b - second.b) ** 2
   );
+}
+
+function profileSimilarity(first, second) {
+  const distance = colorDistance(first, second);
+  const bandwidth = 0.09;
+  return Math.exp(-0.5 * (distance / bandwidth) ** 2);
 }
 
 function hueDistance(first, second) {
