@@ -16,6 +16,10 @@ sync, hosted backend, AI, or account integrations in the current public app.
 - Plans outfits from the items stored on the device.
 - Scores outfit pieces against weather, formality, style, color, layering, and
   recent wear history.
+- Organizes wardrobe coverage by formality, garment type, and length with
+  configurable canonical taxonomy options.
+- Compares actual colors with per-formality target palettes and recommends
+  useful colors for wardrobe gaps.
 - Fetches weather by ZIP code when a user saves a location.
 - Installs as a PWA and can start offline after the app shell has been cached.
 - Exports and imports wardrobe data as JSON from Settings.
@@ -74,7 +78,8 @@ http://localhost:8080/
 Wardrobe uses browser storage, not a server database:
 
 - `items`: wardrobe inventory records.
-- `settings`: local app, weather, and starter-item preferences.
+- `settings`: local app, weather, taxonomy, target palette, and starter-item
+  preferences.
 - `wearLogs`: local wear history.
 - `outfitDays`: saved Today outfits and future outfit plans by calendar date.
 - `weatherCache`: cached ZIP forecast responses.

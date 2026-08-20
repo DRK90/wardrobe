@@ -33,7 +33,6 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
-  categoryOptions,
   climateOptions,
   laundryOptions,
   outfitCategories,
@@ -44,17 +43,41 @@ import { generateOutfit, matchesOutfitSlot, recommendSocks } from "./outfitEngin
 import { exposureOptions, inferWeatherProfile, itemWeatherFit } from "./clothingMeta.js";
 import { groupColorsBySwatch } from "./colorAnalytics.js";
 import {
-  bottomLengthOptions,
+  bottomLengthDefinitions,
+  bottomLengthOptionsFor,
+  categoryDefinitions,
+  categoryOptionsFor,
   coverageFieldFor,
-  coverageFilterOptions,
+  coverageFilterOptionsFor,
   coverageFilterValue,
   coverageGroupFor,
   coverageLabel,
+  defaultTaxonomyConfig,
+  enabledTaxonomyOptions,
+  ensureTaxonomySupportsItems,
+  itemTypeDefinitions,
   itemTypeOptionsFor,
+  itemTypeOptionsForSlot,
+  normalizeTaxonomyConfig,
   outfitSlotOptions,
   resolvedOutfitSlot,
-  sleeveLengthOptions
+  setTaxonomyOptionEnabled,
+  sleeveLengthDefinitions,
+  sleeveLengthOptionsFor,
+  taxonomyUsageCount
 } from "./garmentTaxonomy.js";
+import {
+  defaultColorPreferences,
+  filterItemsByMatrixSelection,
+  formalityLevels,
+  formalitiesForSelection,
+  matrixClauseKey,
+  normalizeColorPreferences,
+  recommendItemColor,
+  setColorPreference,
+  targetColorOptions,
+  targetPaletteForSelection
+} from "./colorPlanning.js";
 import {
   loadItems,
   loadOutfitDays,
@@ -96,7 +119,9 @@ const defaultSettings = {
   removedStarterIds: [],
   homeZip: "",
   destinationEnabled: false,
-  destinationZip: ""
+  destinationZip: "",
+  taxonomy: defaultTaxonomyConfig(),
+  colorPreferences: defaultColorPreferences()
 };
 
 const emptyWeatherCache = {
@@ -125,7 +150,9 @@ function normalizeSettings(settings) {
     destinationZip: settings?.destinationZip ?? defaultSettings.destinationZip,
     removedStarterIds: settings?.removedStarterIds,
     weatherProvider: settings?.weatherProvider ?? defaultSettings.weatherProvider,
-    units: settings?.units ?? defaultSettings.units
+    units: settings?.units ?? defaultSettings.units,
+    taxonomy: normalizeTaxonomyConfig(settings?.taxonomy),
+    colorPreferences: normalizeColorPreferences(settings?.colorPreferences)
   };
   if (!Array.isArray(next.removedStarterIds)) next.removedStarterIds = [];
   next.homeZip = cleanZip(next.homeZip);
@@ -178,7 +205,7 @@ const starterItemIds = new Set(starterItems.map((item) => item.id));
 const filterDefaults = {
   category: "all",
   coverageGroup: "all",
-  itemType: "",
+  itemType: "all",
   coverage: "all",
   brand: "",
   season: "all",
@@ -330,10 +357,12 @@ function optionValue(option) {
   return typeof option === "object" && option !== null ? option.value : option;
 }
 
-function freshItemTemplate() {
+function freshItemTemplate(taxonomy = defaultSettings.taxonomy) {
+  const category = normalizeTaxonomyConfig(taxonomy).categories[0] ?? "";
   return {
     ...newItemTemplate,
-    outfitSlot: "top",
+    category,
+    outfitSlot: resolvedOutfitSlot({ category }),
     outfitTags: [...newItemTemplate.outfitTags],
     season: [...newItemTemplate.season],
     climate: [...newItemTemplate.climate],
@@ -499,7 +528,7 @@ function costPerWear(item) {
 
 function normalizeItem(form) {
   const laundry = form.laundry === "worn" ? "ready" : form.laundry || "ready";
-  return {
+  const item = {
     ...newItemTemplate,
     ...form,
     id: form.id ?? makeId("itm"),
@@ -521,6 +550,8 @@ function normalizeItem(form) {
     climate: form.climate?.length ? form.climate : ["mild"],
     evidencePhotos: normalizeEvidencePhotos(form.evidencePhotos)
   };
+  if (resolvedOutfitSlot(item) === "outerwear" && !item.sleeveLength) item.sleeveLength = "long";
+  return item;
 }
 
 function mergeStarterItems(storedItems, removedStarterIds = []) {
@@ -609,33 +640,47 @@ function compareSwatches(a, b) {
 
 function coverageMatrix(items, slot, field, options) {
   const slotItems = items.filter((item) => coverageGroupFor(item) === slot);
+  const configuredValues = new Set(options.map((option) => option.value));
+  const unconfiguredOptions = [...new Set(slotItems.map((item) => item[field]).filter(Boolean))]
+    .filter((value) => !configuredValues.has(value))
+    .map((value) => ({ value, label: `${labelFor(value)} (not configured)` }));
   const rows = [
-    ...options.map((option) => ({ key: option.value, label: option.label })),
+    ...options,
+    ...unconfiguredOptions,
     { key: "", label: "Not entered" }
-  ].map((row) => {
-    const matching = slotItems.filter((item) => (item[field] || "") === row.key);
+  ].map((option) => {
+    const key = option.value ?? option.key;
+    const matching = slotItems.filter((item) => (item[field] || "") === key);
     const counts = Object.fromEntries(
-      [1, 2, 3, 4, 5].map((formality) => [
+      formalityLevels.map((formality) => [
         formality,
         matching.filter((item) => Number(item.formality) === formality).length
       ])
     );
     return {
-      ...row,
+      key,
+      label: option.label,
       counts,
       total: matching.length,
-      filterValue: row.key ? `${field}:${row.key}` : "missing"
+      filterValue: key || "missing"
     };
   });
 
   return {
     slot,
+    field,
     total: slotItems.length,
+    counts: Object.fromEntries(
+      formalityLevels.map((formality) => [
+        formality,
+        slotItems.filter((item) => Number(item.formality) === formality).length
+      ])
+    ),
     rows
   };
 }
 
-function analyticsFor(items, wearLogs) {
+function analyticsFor(items, wearLogs, settings) {
   const active = items.filter((item) => item.status === "active");
   const totalValue = active.reduce((sum, item) => sum + Number(item.cost || 0), 0);
   const totalWears = active.reduce((sum, item) => sum + Number(item.wears || 0), 0);
@@ -653,9 +698,12 @@ function analyticsFor(items, wearLogs) {
   );
   const byLaundry = [...groupTotals(active, "laundry").values()].sort((a, b) => b.count - a.count);
   const byFormality = [...groupTotals(active, "formality", "cost").values()].sort((a, b) => Number(a.label) - Number(b.label));
+  const taxonomy = normalizeTaxonomyConfig(settings?.taxonomy);
   const coverage = {
-    tops: coverageMatrix(active, "top", "sleeveLength", sleeveLengthOptions),
-    bottoms: coverageMatrix(active, "bottom", "bottomLength", bottomLengthOptions)
+    tops: coverageMatrix(active, "top", "sleeveLength", sleeveLengthOptionsFor(taxonomy)),
+    bottoms: coverageMatrix(active, "bottom", "bottomLength", bottomLengthOptionsFor(taxonomy)),
+    outerwear: coverageMatrix(active, "outerwear", "itemType", itemTypeOptionsForSlot("outerwear", taxonomy)),
+    shoes: coverageMatrix(active, "shoes", "itemType", itemTypeOptionsForSlot("shoes", taxonomy))
   };
   const colors = groupColorsBySwatch(active);
   const gaps = findWardrobeGaps(active);
@@ -787,8 +835,12 @@ function App() {
         loadWeatherCache(),
         loadOutfitDays()
       ]);
-      const nextSettings = normalizeSettings(storedSettings);
+      let nextSettings = normalizeSettings(storedSettings);
       const nextItems = mergeStarterItems(storedItems, nextSettings.removedStarterIds);
+      nextSettings = {
+        ...nextSettings,
+        taxonomy: ensureTaxonomySupportsItems(nextSettings.taxonomy, nextItems)
+      };
       const todayRecord = storedOutfitDays.find((day) => day.id === todayIso());
       const savedTodayPlans = Array.isArray(todayRecord?.todayPlans) ? todayRecord.todayPlans : [];
       const loggedTodayPlans = restoreTodayPlansFromWearLogs(storedWearLogs, nextItems);
@@ -964,8 +1016,7 @@ function App() {
           .some((value) => String(value).toLowerCase().includes(needle));
       const categoryMatch = filters.category === "all" || item.category === filters.category;
       const coverageGroupMatch = filters.coverageGroup === "all" || coverageGroupFor(item) === filters.coverageGroup;
-      const itemTypeMatch =
-        !filters.itemType || String(item.itemType ?? "").toLowerCase().includes(filters.itemType.toLowerCase());
+      const itemTypeMatch = filters.itemType === "all" || item.itemType === filters.itemType;
       const itemCoverage = coverageFilterValue(item);
       const coverageMatch =
         filters.coverage === "all" ||
@@ -1013,7 +1064,7 @@ function App() {
     });
   }, [items, query, filters, sort]);
 
-  const analytics = useMemo(() => analyticsFor(items, wearLogs), [items, wearLogs]);
+  const analytics = useMemo(() => analyticsFor(items, wearLogs, settings), [items, wearLogs, settings]);
   const activeWeather = useMemo(() => activeWeatherEntry(settings, weatherCache), [settings, weatherCache]);
   const todayEventLocation = settings.destinationEnabled ? "destination" : "home";
   const plannerEventLocation = request.planLocationEnabled && validZip(request.planZip) ? "plan" : "home";
@@ -1065,6 +1116,71 @@ function App() {
         weatherProvider: patch.homeZip || current.homeZip ? "nws" : current.weatherProvider
       })
     );
+  }
+
+  function updateTaxonomySetting(group, value, enabled) {
+    const usageCount = taxonomyUsageCount(items, group, value);
+    if (!enabled && usageCount) {
+      showToast(`Update ${usageCount} item${usageCount === 1 ? "" : "s"} first`);
+      return;
+    }
+    if (
+      group === "categories" &&
+      !enabled &&
+      settings.taxonomy.categories.length === 1 &&
+      settings.taxonomy.categories.includes(value)
+    ) {
+      showToast("Keep at least one category");
+      return;
+    }
+
+    const taxonomy = setTaxonomyOptionEnabled(settings.taxonomy, group, value, enabled);
+    setSettings((current) => normalizeSettings({ ...current, taxonomy }));
+    if (!enabled) {
+      setFilters((current) => {
+        if (group === "categories" && current.category === value) return { ...current, category: "all" };
+        if (group === "itemTypes" && current.itemType === value) return { ...current, itemType: "all" };
+        if (
+          ["sleeveLengths", "bottomLengths"].includes(group) &&
+          current.coverage.endsWith(`:${value}`)
+        ) {
+          return { ...current, coverage: "all" };
+        }
+        return current;
+      });
+    }
+    setForm((current) => {
+      if (enabled) return current;
+      if (group === "categories" && current.category === value) {
+        const category = taxonomy.categories[0] ?? "";
+        return { ...current, category, outfitSlot: resolvedOutfitSlot({ category }), itemType: "" };
+      }
+      if (group === "itemTypes" && current.itemType === value) return { ...current, itemType: "" };
+      if (group === "sleeveLengths" && current.sleeveLength === value) return { ...current, sleeveLength: "" };
+      if (group === "bottomLengths" && current.bottomLength === value) return { ...current, bottomLength: "" };
+      return current;
+    });
+  }
+
+  function updateTargetColorPreference(formality, colorId, rating) {
+    setSettings((current) =>
+      normalizeSettings({
+        ...current,
+        colorPreferences: setColorPreference(current.colorPreferences, formality, colorId, rating)
+      })
+    );
+  }
+
+  function resetTargetPalette(formality) {
+    if (!window.confirm(`Reset the F${formality} target palette to 3/5?`)) return;
+    setSettings((current) => ({
+      ...current,
+      colorPreferences: {
+        ...normalizeColorPreferences(current.colorPreferences),
+        [formality]: Object.fromEntries(targetColorOptions.map((color) => [color.id, 3]))
+      }
+    }));
+    showToast(`F${formality} palette reset`);
   }
 
   function saveInventoryItem(updatedItem) {
@@ -1550,7 +1666,7 @@ function App() {
     event.preventDefault();
     const item = normalizeItem(form);
     setItems((current) => [item, ...current]);
-    setForm(freshItemTemplate());
+    setForm(freshItemTemplate(settings.taxonomy));
     setView("inventory");
     showToast("Item saved");
   }
@@ -1561,7 +1677,7 @@ function App() {
     delete exportSettings.aiApiKey;
     const payload = {
       exportedAt: new Date().toISOString(),
-      version: 6,
+      version: 7,
       items,
       wearLogs,
       outfitDays,
@@ -1612,7 +1728,11 @@ function App() {
     setOutfitLocks(importedPlanner.locks);
     setGeneratedOutfit(importedPlanner.outfit);
     setWeatherCache({ ...emptyWeatherCache, ...(payload.weatherCache ?? {}) });
-    if (payload.settings) setSettings(normalizeSettings({ ...payload.settings, id: "main" }));
+    const importedSettings = normalizeSettings({ ...(payload.settings ?? settings), id: "main" });
+    setSettings({
+      ...importedSettings,
+      taxonomy: ensureTaxonomySupportsItems(importedSettings.taxonomy, importedItems)
+    });
     showToast("Import complete");
   }
 
@@ -1671,7 +1791,13 @@ function App() {
               />
             ) : null}
             {view === "insights" ? (
-              <InsightsView analytics={analytics} setFilters={setFilters} setQuery={setQuery} setView={setView} />
+              <InsightsView
+                analytics={analytics}
+                settings={settings}
+                setFilters={setFilters}
+                setQuery={setQuery}
+                setView={setView}
+              />
             ) : null}
             {view === "inventory" ? (
               <InventoryView
@@ -1685,6 +1811,7 @@ function App() {
                 setSort={setSort}
                 onRemove={removeItem}
                 onSaveItem={saveInventoryItem}
+                taxonomy={settings.taxonomy}
               />
             ) : null}
             {view === "planner" ? (
@@ -1715,11 +1842,13 @@ function App() {
                 form={form}
                 setForm={setForm}
                 onSubmit={saveNewItem}
+                taxonomy={settings.taxonomy}
               />
             ) : null}
             {view === "settings" ? (
               <SettingsView
                 settings={settings}
+                items={items}
                 onInstall={installApp}
                 isInstalled={isInstalled}
                 onExport={exportData}
@@ -1727,6 +1856,9 @@ function App() {
                 importRef={importRef}
                 onImport={importData}
                 onUpdateWeatherSettings={updateWeatherSettings}
+                onUpdateTaxonomy={updateTaxonomySetting}
+                onUpdateColorPreference={updateTargetColorPreference}
+                onResetTargetPalette={resetTargetPalette}
                 onRemoveStarterWardrobe={removeStarterWardrobe}
                 starterItemCount={items.filter((item) => starterItemIds.has(item.id)).length}
               />
@@ -2297,12 +2429,42 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
   );
 }
 
-function InsightsView({ analytics, setFilters, setQuery, setView }) {
+function InsightsView({ analytics, settings, setFilters, setQuery, setView }) {
+  const [paletteSelection, setPaletteSelection] = useState([]);
+  const paletteItems = filterItemsByMatrixSelection(analytics.active, paletteSelection);
+  const paletteColors = groupColorsBySwatch(paletteItems);
+  const targetPalette = targetPaletteForSelection(settings.colorPreferences, paletteSelection);
+  const recommendation = recommendItemColor({
+    selectedItems: paletteItems,
+    allItems: analytics.active,
+    clauses: paletteSelection,
+    preferences: settings.colorPreferences
+  });
+
+  function togglePaletteClause(clause) {
+    const key = matrixClauseKey(clause);
+    setPaletteSelection((current) =>
+      current.some((candidate) => matrixClauseKey(candidate) === key)
+        ? current.filter((candidate) => matrixClauseKey(candidate) !== key)
+        : [...current, clause]
+    );
+  }
+
   return (
     <section className="dashboard-stack" {...componentMeta("InsightsView")}>
-      <ColorPalettePanel colors={analytics.colors} setFilters={setFilters} setQuery={setQuery} setView={setView} />
       <CoverageMatrix
         coverage={analytics.coverage}
+        selection={paletteSelection}
+        onToggleClause={togglePaletteClause}
+      />
+      <ColorPalettePanel
+        colors={paletteColors}
+        itemCount={paletteItems.length}
+        selection={paletteSelection}
+        targetPalette={targetPalette}
+        recommendation={recommendation}
+        onClearSelection={() => setPaletteSelection([])}
+        onRemoveClause={togglePaletteClause}
         setFilters={setFilters}
         setQuery={setQuery}
         setView={setView}
@@ -2630,14 +2792,34 @@ function BarList({ rows, valueKey }) {
   );
 }
 
-function CoverageMatrix({ coverage, setFilters, setQuery, setView }) {
-  function openInventory(coverageGroup, filterValue, formality = "all") {
-    setFilters({ ...filterDefaults, coverageGroup, coverage: filterValue, formality: String(formality) });
-    setQuery("");
-    setView("inventory");
-  }
-
+function CoverageMatrix({ coverage, selection, onToggleClause }) {
   function MatrixTable({ title, matrix, rowHeading }) {
+    function clauseFor(value, formality, rowLabel) {
+      return {
+        slot: matrix.slot,
+        field: matrix.field,
+        value,
+        formality,
+        label: `${formality ? `F${formality}` : "All formalities"} · ${title} · ${rowLabel}`
+      };
+    }
+
+    function MatrixCell({ count, value, formality, rowLabel }) {
+      const clause = clauseFor(value, formality, rowLabel);
+      const selected = selection.some((candidate) => matrixClauseKey(candidate) === matrixClauseKey(clause));
+      return (
+        <button
+          className={selected ? "selected" : ""}
+          type="button"
+          aria-pressed={selected}
+          onClick={() => onToggleClause(clause)}
+          aria-label={`${clause.label}, ${count} item${count === 1 ? "" : "s"}`}
+        >
+          {count}
+        </button>
+      );
+    }
+
     return (
       <section className="coverage-matrix-group" aria-label={`${title} by formality`}>
         <div className="coverage-matrix-heading">
@@ -2649,7 +2831,7 @@ function CoverageMatrix({ coverage, setFilters, setQuery, setView }) {
             <thead>
               <tr>
                 <th>{rowHeading}</th>
-                {[1, 2, 3, 4, 5].map((formality) => <th key={formality}>F{formality}</th>)}
+                {formalityLevels.map((formality) => <th key={formality}>F{formality}</th>)}
                 <th>Total</th>
               </tr>
             </thead>
@@ -2657,30 +2839,27 @@ function CoverageMatrix({ coverage, setFilters, setQuery, setView }) {
               {matrix.rows.map((row) => (
                 <tr key={row.label}>
                   <th>{row.label}</th>
-                  {[1, 2, 3, 4, 5].map((formality) => (
+                  {formalityLevels.map((formality) => (
                     <td key={formality}>
-                      <button
-                        type="button"
-                        disabled={!row.counts[formality]}
-                        onClick={() => openInventory(matrix.slot, row.filterValue, formality)}
-                        aria-label={`${row.counts[formality]} ${title.toLowerCase()}, ${row.label.toLowerCase()}, formality ${formality}`}
-                      >
-                        {row.counts[formality]}
-                      </button>
+                      <MatrixCell count={row.counts[formality]} value={row.filterValue} formality={formality} rowLabel={row.label} />
                     </td>
                   ))}
                   <td>
-                    <button
-                      type="button"
-                      disabled={!row.total}
-                      onClick={() => openInventory(matrix.slot, row.filterValue)}
-                      aria-label={`${row.total} ${title.toLowerCase()}, ${row.label.toLowerCase()}`}
-                    >
-                      {row.total}
-                    </button>
+                    <MatrixCell count={row.total} value={row.filterValue} formality={0} rowLabel={row.label} />
                   </td>
                 </tr>
               ))}
+              <tr className="coverage-matrix-total-row">
+                <th>All {title.toLowerCase()}</th>
+                {formalityLevels.map((formality) => (
+                  <td key={formality}>
+                    <MatrixCell count={matrix.counts[formality]} value="all" formality={formality} rowLabel="All" />
+                  </td>
+                ))}
+                <td>
+                  <MatrixCell count={matrix.total} value="all" formality={0} rowLabel="All" />
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -2692,13 +2871,15 @@ function CoverageMatrix({ coverage, setFilters, setQuery, setView }) {
     <section className="panel coverage-matrix-panel" {...componentMeta("CoverageMatrix")}>
       <div className="panel-header">
         <div>
-          <h1>Top and bottom coverage</h1>
+          <h1>Wardrobe matrix</h1>
           <span className="panel-subtitle">Item counts by formality</span>
         </div>
       </div>
       <div className="coverage-matrix-layout">
         <MatrixTable title="Tops" matrix={coverage.tops} rowHeading="Sleeve" />
         <MatrixTable title="Bottoms" matrix={coverage.bottoms} rowHeading="Length" />
+        <MatrixTable title="Outerwear" matrix={coverage.outerwear} rowHeading="Type" />
+        <MatrixTable title="Shoes" matrix={coverage.shoes} rowHeading="Type" />
       </div>
     </section>
   );
@@ -2720,7 +2901,18 @@ function BrandCoverageList({ rows }) {
   );
 }
 
-function ColorPalettePanel({ colors, setFilters, setQuery, setView }) {
+function ColorPalettePanel({
+  colors,
+  itemCount,
+  selection,
+  targetPalette,
+  recommendation,
+  onClearSelection,
+  onRemoveClause,
+  setFilters,
+  setQuery,
+  setView
+}) {
   const sorted = [...colors].sort(compareSwatches);
   const legendEntries = sorted.flatMap((entry) =>
     entry.colors.map((color) => ({ swatch: entry.swatch, color }))
@@ -2743,11 +2935,44 @@ function ColorPalettePanel({ colors, setFilters, setQuery, setView }) {
       <div className="panel-header">
         <div>
           <h1>Color palette</h1>
+          <span className="panel-subtitle">{itemCount} item{itemCount === 1 ? "" : "s"}</span>
         </div>
+        {selection.length ? (
+          <button className="secondary-button" type="button" onClick={onClearSelection}>
+            <X size={15} aria-hidden="true" />
+            All wardrobe
+          </button>
+        ) : null}
+      </div>
+      <div className="palette-selection-bar" aria-label="Selected matrix cells">
+        {selection.length ? selection.map((clause) => (
+          <button type="button" key={matrixClauseKey(clause)} onClick={() => onRemoveClause(clause)}>
+            {clause.label}
+            <X size={13} aria-hidden="true" />
+          </button>
+        )) : <strong>All wardrobe</strong>}
       </div>
       <div className="color-pie-layout">
-        <div className="color-pie" style={{ "--pie": gradient }} aria-label="Wardrobe colors" />
-        <div className="palette-grid compact">
+        <div className="actual-palette-visual">
+          <div className="color-pie" style={{ "--pie": gradient }} aria-label="Wardrobe colors" />
+          {recommendation ? (
+            <div className="color-recommendation">
+              <span className="recommendation-swatch" style={{ "--swatch": recommendation.swatch }} />
+              <div>
+                <small>Recommended next color</small>
+                <strong>{recommendation.name}</strong>
+                <span>
+                  {recommendation.rating.toFixed(recommendation.rating % 1 ? 1 : 0)}/5 target · {recommendation.actualCount} owned here · {recommendation.compatibleCount} compatible pieces
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="color-recommendation empty">
+              <strong>No target colors selected</strong>
+            </div>
+          )}
+        </div>
+        <div className="palette-grid compact actual-palette-legend">
           {legendEntries.map((entry) => (
             <button
               key={`${entry.swatch}-${entry.color}`}
@@ -2764,8 +2989,25 @@ function ColorPalettePanel({ colors, setFilters, setQuery, setView }) {
               <strong>{entry.color || "Color"}</strong>
             </button>
           ))}
+          {!legendEntries.length ? <p className="muted compact-text">No colors in this selection.</p> : null}
         </div>
       </div>
+      <section className="target-palette-section" aria-label="Target palette">
+        <div className="target-palette-heading">
+          <h2>Target palette</h2>
+          <span>{formalitiesForSelection(selection).map((formality) => `F${formality}`).join(", ")}</span>
+        </div>
+        <div className="target-palette-grid">
+          {targetPalette.map((color) => (
+            <div key={color.id} className="target-color" style={{ "--swatch": color.swatch }}>
+              <span />
+              <strong>{color.name}</strong>
+              <small>{color.rating.toFixed(color.rating % 1 ? 1 : 0)}</small>
+            </div>
+          ))}
+          {!targetPalette.length ? <p className="muted compact-text">No target colors selected.</p> : null}
+        </div>
+      </section>
     </div>
   );
 }
@@ -2825,39 +3067,44 @@ function ImageFileButton({ label, icon: Icon = ImagePlus, capture = false, multi
   );
 }
 
-function GarmentStructureFields({ item, onChange }) {
+function GarmentStructureFields({ item, onChange, taxonomy }) {
   const outfitSlot = resolvedOutfitSlot(item);
   const hasFlexiblePosition = ["athletic", "underwear", "sleepwear", "swimwear"].includes(item.category);
 
   function changeCategory(category) {
     onChange("category", category);
+    onChange("itemType", "");
     const defaultSlot = resolvedOutfitSlot({ category });
     if (defaultSlot) onChange("outfitSlot", defaultSlot);
+    if (defaultSlot === "outerwear") onChange("sleeveLength", "long");
   }
 
   return (
     <>
-      <Select label="Category" value={item.category} onChange={changeCategory} options={categoryOptions} />
+      <Select label="Category" value={item.category} onChange={changeCategory} options={categoryOptionsFor(taxonomy, item.category)} required />
       {hasFlexiblePosition ? (
         <Select
           label="Outfit position"
           value={item.outfitSlot || outfitSlot}
           onChange={(value) => onChange("outfitSlot", value)}
           options={[{ value: "", label: "Select" }, ...outfitSlotOptions]}
+          required
         />
       ) : null}
-      <SelectWithCustom
+      <Select
         label="Item type"
         value={item.itemType}
         onChange={(value) => onChange("itemType", value)}
-        options={itemTypeOptionsFor(item)}
+        options={[{ value: "", label: "Select" }, ...itemTypeOptionsFor(item, taxonomy)]}
+        required
       />
-      {outfitSlot === "top" || outfitSlot === "outerwear" ? (
+      {outfitSlot === "top" ? (
         <Select
           label="Sleeve length"
           value={item.sleeveLength}
           onChange={(value) => onChange("sleeveLength", value)}
-          options={[{ value: "", label: "Select" }, ...sleeveLengthOptions]}
+          options={[{ value: "", label: "Select" }, ...sleeveLengthOptionsFor(taxonomy, item.sleeveLength)]}
+          required
         />
       ) : null}
       {outfitSlot === "bottom" ? (
@@ -2865,7 +3112,8 @@ function GarmentStructureFields({ item, onChange }) {
           label="Bottom length"
           value={item.bottomLength}
           onChange={(value) => onChange("bottomLength", value)}
-          options={[{ value: "", label: "Select" }, ...bottomLengthOptions]}
+          options={[{ value: "", label: "Select" }, ...bottomLengthOptionsFor(taxonomy, item.bottomLength)]}
+          required
         />
       ) : null}
       <label>
@@ -2876,7 +3124,7 @@ function GarmentStructureFields({ item, onChange }) {
   );
 }
 
-function ItemDetailModal({ item, onSave, onClose }) {
+function ItemDetailModal({ item, onSave, onClose, taxonomy }) {
   const [draft, setDraft] = useState(() => normalizeItem(item));
   const titleId = `item-modal-title-${item.id}`;
 
@@ -3081,7 +3329,7 @@ function ItemDetailModal({ item, onSave, onClose }) {
                 Name
                 <input required value={draft.name} onChange={(event) => setField("name", event.target.value)} />
               </label>
-              <GarmentStructureFields item={draft} onChange={setField} />
+              <GarmentStructureFields item={draft} onChange={setField} taxonomy={taxonomy} />
               <label>
                 Brand
                 <input value={draft.brand} onChange={(event) => setField("brand", event.target.value)} />
@@ -3207,7 +3455,8 @@ function InventoryView({
   sort,
   setSort,
   onRemove,
-  onSaveItem
+  onSaveItem,
+  taxonomy
 }) {
   const [selectedItemId, setSelectedItemId] = useState("");
   const selectedItem = allItems.find((candidate) => candidate.id === selectedItemId);
@@ -3282,17 +3531,22 @@ function InventoryView({
               </th>
               <th>
                 <select aria-label="Filter category" value={filters.category} onChange={(event) => updateFilter("category", event.target.value)}>
-                  {["all", ...categoryOptions].map((option) => (
-                    <option key={option} value={option}>{labelFor(option)}</option>
+                  {[{ value: "all", label: "All categories" }, ...categoryOptionsFor(taxonomy)].map((option) => (
+                    <option key={optionValue(option)} value={optionValue(option)}>{labelFor(option)}</option>
                   ))}
                 </select>
               </th>
               <th>
-                <input aria-label="Filter item type" value={filters.itemType} onChange={(event) => updateFilter("itemType", event.target.value)} placeholder="Type" />
+                <select aria-label="Filter item type" value={filters.itemType} onChange={(event) => updateFilter("itemType", event.target.value)}>
+                  <option value="all">All types</option>
+                  {enabledTaxonomyOptions(taxonomy, "itemTypes").map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
               </th>
               <th>
                 <select aria-label="Filter coverage" value={filters.coverage} onChange={(event) => updateFilter("coverage", event.target.value)}>
-                  {coverageFilterOptions.map((option) => (
+                  {coverageFilterOptionsFor(taxonomy).map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
@@ -3415,17 +3669,18 @@ function InventoryView({
           item={selectedItem}
           onSave={onSaveItem}
           onClose={() => setSelectedItemId("")}
+          taxonomy={taxonomy}
         />
       ) : null}
     </section>
   );
 }
 
-function Select({ label, value, onChange, options }) {
+function Select({ label, value, onChange, options, required = false }) {
   return (
     <label>
       {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select value={value} required={required} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => (
           <option key={optionValue(option)} value={optionValue(option)}>
             {labelFor(option)}
@@ -4166,7 +4421,7 @@ function SlotPicker({ slot, title, query, setQuery, allItems, candidates, exclud
   );
 }
 
-function CaptureView({ form, setForm, onSubmit }) {
+function CaptureView({ form, setForm, onSubmit, taxonomy }) {
   function setField(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -4237,7 +4492,7 @@ function CaptureView({ form, setForm, onSubmit }) {
             Name
             <input required value={form.name} onChange={(event) => setField("name", event.target.value)} />
           </label>
-          <GarmentStructureFields item={form} onChange={setField} />
+          <GarmentStructureFields item={form} onChange={setField} taxonomy={taxonomy} />
           <label>
             Brand
             <input value={form.brand} onChange={(event) => setField("brand", event.target.value)} />
@@ -4325,7 +4580,7 @@ function CaptureView({ form, setForm, onSubmit }) {
             <Plus size={16} aria-hidden="true" />
             Save item
           </button>
-          <button className="secondary-button" type="button" onClick={() => setForm(freshItemTemplate())}>
+          <button className="secondary-button" type="button" onClick={() => setForm(freshItemTemplate(taxonomy))}>
             Reset
           </button>
         </div>
@@ -4374,8 +4629,95 @@ function InstallHelpDialog({ canPrompt, onPrompt, onClose }) {
   );
 }
 
+function TaxonomyOptionGroup({ title, group, options, taxonomy, items, onToggle }) {
+  const enabled = new Set(taxonomy[group] ?? []);
+  return (
+    <fieldset className={group === "itemTypes" ? "taxonomy-option-group wide" : "taxonomy-option-group"}>
+      <legend>{title}</legend>
+      <div className="taxonomy-option-grid">
+        {options.map((option) => {
+          const count = taxonomyUsageCount(items, group, option.value);
+          const checked = enabled.has(option.value);
+          return (
+            <label key={option.value} className="taxonomy-option">
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={checked && count > 0}
+                onChange={(event) => onToggle(group, option.value, event.target.checked)}
+              />
+              <span>
+                <strong>{option.label}</strong>
+                <small>{count} item{count === 1 ? "" : "s"}</small>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
+
+function TargetPaletteSettings({ preferences, onChange, onReset }) {
+  const [formality, setFormality] = useState(3);
+  const normalized = normalizeColorPreferences(preferences);
+
+  return (
+    <div className="target-palette-settings">
+      <div className="target-palette-toolbar">
+        <div className="palette-formality-tabs" aria-label="Target palette formality">
+          {formalityLevels.map((level) => (
+            <button
+              className={formality === level ? "selected" : ""}
+              type="button"
+              key={level}
+              aria-pressed={formality === level}
+              onClick={() => setFormality(level)}
+            >
+              F{level}
+            </button>
+          ))}
+        </div>
+        <button className="secondary-button" type="button" onClick={() => onReset(formality)}>
+          <RefreshCcw size={15} aria-hidden="true" />
+          Reset F{formality}
+        </button>
+      </div>
+      <div className="color-preference-grid">
+        {targetColorOptions.map((color) => {
+          const rating = normalized[formality][color.id];
+          return (
+            <div className={rating ? "color-preference" : "color-preference excluded"} key={color.id}>
+              <label className="color-preference-include">
+                <input
+                  type="checkbox"
+                  checked={rating > 0}
+                  onChange={(event) => onChange(formality, color.id, event.target.checked ? 3 : 0)}
+                />
+                <span className="color-preference-swatch" style={{ "--swatch": color.swatch }} />
+                <strong>{color.name}</strong>
+              </label>
+              <input
+                type="range"
+                min="1"
+                max="5"
+                value={rating || 3}
+                disabled={!rating}
+                aria-label={`${color.name} preference for formality ${formality}`}
+                onChange={(event) => onChange(formality, color.id, Number(event.target.value))}
+              />
+              <output>{rating || "Off"}</output>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
+  items,
   onInstall,
   isInstalled,
   onExport,
@@ -4383,6 +4725,9 @@ function SettingsView({
   importRef,
   onImport,
   onUpdateWeatherSettings,
+  onUpdateTaxonomy,
+  onUpdateColorPreference,
+  onResetTargetPalette,
   onRemoveStarterWardrobe,
   starterItemCount
 }) {
@@ -4417,6 +4762,61 @@ function SettingsView({
             onChange={(event) => onImport(event.target.files?.[0]).catch((error) => alert(error.message))}
           />
         </div>
+      </div>
+
+      <div className="panel settings-structure-panel">
+        <div className="panel-header">
+          <div>
+            <h1>Wardrobe structure</h1>
+          </div>
+        </div>
+        <div className="taxonomy-settings-layout">
+          <TaxonomyOptionGroup
+            title="Categories"
+            group="categories"
+            options={categoryDefinitions}
+            taxonomy={settings.taxonomy}
+            items={items}
+            onToggle={onUpdateTaxonomy}
+          />
+          <TaxonomyOptionGroup
+            title="Sleeve lengths"
+            group="sleeveLengths"
+            options={sleeveLengthDefinitions}
+            taxonomy={settings.taxonomy}
+            items={items}
+            onToggle={onUpdateTaxonomy}
+          />
+          <TaxonomyOptionGroup
+            title="Bottom lengths"
+            group="bottomLengths"
+            options={bottomLengthDefinitions}
+            taxonomy={settings.taxonomy}
+            items={items}
+            onToggle={onUpdateTaxonomy}
+          />
+          <TaxonomyOptionGroup
+            title="Item types"
+            group="itemTypes"
+            options={itemTypeDefinitions}
+            taxonomy={settings.taxonomy}
+            items={items}
+            onToggle={onUpdateTaxonomy}
+          />
+        </div>
+      </div>
+
+      <div className="panel target-palette-panel">
+        <div className="panel-header">
+          <div>
+            <h1>Target palette</h1>
+          </div>
+        </div>
+        <TargetPaletteSettings
+          preferences={settings.colorPreferences}
+          onChange={onUpdateColorPreference}
+          onReset={onResetTargetPalette}
+        />
       </div>
 
       <div className="panel">

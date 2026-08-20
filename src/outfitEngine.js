@@ -1,6 +1,6 @@
 import { slotOrder } from "./data.js";
 import { coverageWeatherFit, effectiveWeatherForExposure, itemWeatherFit } from "./clothingMeta.js";
-import { resolvedOutfitSlot } from "./garmentTaxonomy.js";
+import { coverageDefinitionFor, resolvedOutfitSlot } from "./garmentTaxonomy.js";
 
 const selectionOrder = ["top", "bottom", "shoes", "outerwear", "accessory"];
 const neutralColorWords = /black|white|gray|grey|charcoal|navy|denim|stone|taupe|cream|ivory|tan|khaki|brown|camel|beige/i;
@@ -145,12 +145,12 @@ function sockColorFamily(item) {
 }
 
 function sockLengthFor(bottom, shoes, request, weather) {
-  const shoeText = `${shoes?.name ?? ""} ${shoes?.itemType ?? ""} ${shoes?.subcategory ?? ""} ${shoes?.material ?? ""}`.toLowerCase();
+  const shoeText = `${shoes?.name ?? ""} ${shoes?.itemType ?? ""} ${shoes?.material ?? ""}`.toLowerCase();
   const formalPlan = ["formal", "professional"].includes(request.outfitCategory);
   const dressShoe = /oxford|derby|loafer|monk|dress|calf|full-grain|leather/.test(shoeText);
   const boot = /boot/.test(shoeText);
   const athleticShoe = /runner|running|sneaker|trainer|athletic|trail|mesh/.test(shoeText);
-  const shorts = bottom?.bottomLength === "short";
+  const shorts = bottom ? (coverageDefinitionFor(bottom)?.coverage ?? 1) <= 0.5 : false;
   let tallScore = 0;
   let shortScore = 0;
 
@@ -171,7 +171,7 @@ function sockLengthFor(bottom, shoes, request, weather) {
 }
 
 function sockColorFor(bottom, shoes, request, length) {
-  const bottomIsShort = bottom?.bottomLength === "short";
+  const bottomIsShort = bottom ? (coverageDefinitionFor(bottom)?.coverage ?? 1) <= 0.5 : false;
   const bottomFamily = sockColorFamily(bottom);
   const shoeFamily = sockColorFamily(shoes);
 
@@ -203,8 +203,8 @@ export function recommendSocks(selections, request) {
   const weather = effectiveWeatherForExposure(request);
   const length = sockLengthFor(bottom, shoes, request, weather);
   const color = sockColorFor(bottom, shoes, request, length);
-  const shoeText = `${shoes.name ?? ""} ${shoes.itemType ?? ""} ${shoes.subcategory ?? ""}`.toLowerCase();
-  const bottomIsShort = bottom?.bottomLength === "short";
+  const shoeText = `${shoes.name ?? ""} ${shoes.itemType ?? ""}`.toLowerCase();
+  const bottomIsShort = bottom ? (coverageDefinitionFor(bottom)?.coverage ?? 1) <= 0.5 : false;
   const lengthReason =
     length === "short"
       ? bottomIsShort
@@ -262,7 +262,7 @@ function colorHarmonyScore(item, selections) {
 }
 
 function materialProfile(item) {
-  const text = `${item.material ?? ""} ${item.fabric ?? ""} ${item.itemType ?? ""} ${item.subcategory ?? ""}`.toLowerCase();
+  const text = `${item.material ?? ""} ${item.fabric ?? ""} ${item.itemType ?? ""}`.toLowerCase();
   return {
     formal: /worsted|cashmere|silk|satin|oxford|poplin|dress|calf|full-grain|suede|leather/.test(text),
     rugged: /denim|canvas|flannel|corduroy|waxed|workwear/.test(text),
