@@ -2804,26 +2804,44 @@ function CoverageMatrix({ coverage, selection, onToggleClause }) {
       };
     }
 
-    function MatrixCell({ count, value, formality, rowLabel }) {
-      const clause = clauseFor(value, formality, rowLabel);
-      const selected = selection.some((candidate) => matrixClauseKey(candidate) === matrixClauseKey(clause));
+    function clauseIsSelected(clause) {
+      return selection.some((candidate) => matrixClauseKey(candidate) === matrixClauseKey(clause));
+    }
+
+    function MatrixSelector({ clause, count, className, children }) {
+      const selected = clauseIsSelected(clause);
       return (
         <button
-          className={selected ? "selected" : ""}
+          className={`${className}${selected ? " selected" : ""}`}
           type="button"
           aria-pressed={selected}
           onClick={() => onToggleClause(clause)}
           aria-label={`${clause.label}, ${count} item${count === 1 ? "" : "s"}`}
         >
-          {count}
+          {children}
         </button>
       );
     }
 
+    function MatrixCell({ count, value, formality, rowLabel }) {
+      const clause = clauseFor(value, formality, rowLabel);
+      return (
+        <MatrixSelector clause={clause} count={count} className="matrix-count-button">
+          {count}
+        </MatrixSelector>
+      );
+    }
+
+    const allClause = clauseFor("all", 0, "All");
+
     return (
       <section className="coverage-matrix-group" aria-label={`${title} by formality`}>
         <div className="coverage-matrix-heading">
-          <h2>{title}</h2>
+          <h2>
+            <MatrixSelector clause={allClause} count={matrix.total} className="coverage-matrix-title-button">
+              {title}
+            </MatrixSelector>
+          </h2>
           <strong>{matrix.total} total</strong>
         </div>
         <div className="coverage-matrix-scroll">
@@ -2831,14 +2849,36 @@ function CoverageMatrix({ coverage, selection, onToggleClause }) {
             <thead>
               <tr>
                 <th>{rowHeading}</th>
-                {formalityLevels.map((formality) => <th key={formality}>F{formality}</th>)}
-                <th>Total</th>
+                {formalityLevels.map((formality) => (
+                  <th key={formality}>
+                    <MatrixSelector
+                      clause={clauseFor("all", formality, "All")}
+                      count={matrix.counts[formality]}
+                      className="matrix-axis-button"
+                    >
+                      F{formality}
+                    </MatrixSelector>
+                  </th>
+                ))}
+                <th>
+                  <MatrixSelector clause={allClause} count={matrix.total} className="matrix-axis-button">
+                    Total
+                  </MatrixSelector>
+                </th>
               </tr>
             </thead>
             <tbody>
               {matrix.rows.map((row) => (
                 <tr key={row.label}>
-                  <th>{row.label}</th>
+                  <th>
+                    <MatrixSelector
+                      clause={clauseFor(row.filterValue, 0, row.label)}
+                      count={row.total}
+                      className="matrix-row-button"
+                    >
+                      {row.label}
+                    </MatrixSelector>
+                  </th>
                   {formalityLevels.map((formality) => (
                     <td key={formality}>
                       <MatrixCell count={row.counts[formality]} value={row.filterValue} formality={formality} rowLabel={row.label} />
@@ -2850,7 +2890,11 @@ function CoverageMatrix({ coverage, selection, onToggleClause }) {
                 </tr>
               ))}
               <tr className="coverage-matrix-total-row">
-                <th>All {title.toLowerCase()}</th>
+                <th>
+                  <MatrixSelector clause={allClause} count={matrix.total} className="matrix-row-button">
+                    All {title.toLowerCase()}
+                  </MatrixSelector>
+                </th>
                 {formalityLevels.map((formality) => (
                   <td key={formality}>
                     <MatrixCell count={matrix.counts[formality]} value="all" formality={formality} rowLabel="All" />

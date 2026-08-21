@@ -123,27 +123,30 @@ export function recommendItemColor({ selectedItems, allItems, clauses, preferenc
     targets.forEach((target) => {
       const similarity = profileSimilarity(itemProfile, profiles.get(target.id));
       actualCounts[target.id] += similarity;
-      if (similarity >= 0.7) similarItemCounts[target.id] += 1;
+      if (similarity >= 0.55) similarItemCounts[target.id] += 1;
     });
   });
 
-  const totalTargetWeight = targets.reduce((sum, target) => sum + target.rating, 0) || 1;
-  const selectedTotal = selectedItems.length || 1;
   const scored = targets.map((target) => {
     const profile = profiles.get(target.id);
-    const preferenceShare = target.rating / totalTargetWeight;
-    const actualShare = actualCounts[target.id] / selectedTotal;
-    const representationGap = preferenceShare - actualShare;
+    const desiredCoverage = 0.75 + target.rating * 0.25;
+    const coverageRatio = actualCounts[target.id] / desiredCoverage;
+    const coverageGap = Math.max(0, 1 - coverageRatio);
     const compatibilityScores = relevantItems.map((item) => colorCompatibility(profile, colorProfile(item.swatch)));
     const versatility = compatibilityScores.length
       ? compatibilityScores.reduce((sum, score) => sum + score, 0) / compatibilityScores.length
       : 0.5;
     const compatibleCount = compatibilityScores.filter((score) => score >= 0.64).length;
-    const score = target.rating * 18 + representationGap * 110 + versatility * 20 - actualCounts[target.id] * 2.5;
+    const score =
+      target.rating * 12 +
+      coverageGap * 60 +
+      versatility * 10 -
+      Math.min(actualCounts[target.id], 4) * 8;
     return {
       ...target,
       score,
       actualCount: actualCounts[target.id],
+      coverageRatio,
       similarItemCount: similarItemCounts[target.id],
       compatibleCount,
       formalityLevels: formalities
@@ -219,7 +222,8 @@ function colorDistance(first, second) {
 
 function profileSimilarity(first, second) {
   const distance = colorDistance(first, second);
-  const bandwidth = 0.09;
+  if (distance >= 0.24) return 0;
+  const bandwidth = 0.11;
   return Math.exp(-0.5 * (distance / bandwidth) ** 2);
 }
 

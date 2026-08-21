@@ -1029,6 +1029,24 @@ textarea {
   font-size: 0.9rem;
 }
 
+.coverage-matrix-title-button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--color-ink);
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-weight: 800;
+}
+
+.coverage-matrix-title-button:hover,
+.coverage-matrix-title-button.selected {
+  border-color: var(--color-primary);
+  background: color-mix(in oklch, var(--color-primary), transparent 90%);
+  color: var(--color-primary-strong);
+}
+
 .coverage-matrix-heading strong {
   color: var(--color-muted);
   font-size: 0.74rem;
@@ -1067,7 +1085,7 @@ textarea {
   font-weight: 750;
 }
 
-.coverage-matrix-table button {
+.matrix-count-button {
   width: 38px;
   height: 34px;
   border: 0;
@@ -1078,22 +1096,46 @@ textarea {
   font-weight: 850;
 }
 
-.coverage-matrix-table button:not(:disabled):hover {
+.matrix-count-button:hover {
   background: var(--color-primary);
   color: white;
 }
 
-.coverage-matrix-table button.selected {
+.matrix-count-button.selected {
   background: var(--color-primary);
   color: white;
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-primary), transparent 70%);
 }
 
-.coverage-matrix-table button:disabled {
+.matrix-axis-button,
+.matrix-row-button {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
   background: transparent;
-  color: var(--color-muted);
-  cursor: default;
-  opacity: 0.65;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+}
+
+.matrix-axis-button {
+  min-width: 38px;
+  padding: var(--space-1);
+}
+
+.matrix-row-button {
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+}
+
+.matrix-axis-button:hover,
+.matrix-row-button:hover,
+.matrix-axis-button.selected,
+.matrix-row-button.selected {
+  border-color: var(--color-primary);
+  background: color-mix(in oklch, var(--color-primary), transparent 90%);
+  color: var(--color-primary-strong);
 }
 
 .coverage-matrix-total-row th,
@@ -2888,9 +2930,15 @@ meter {
     border-left: 0;
   }
 
-  .coverage-matrix-table button {
+  .matrix-count-button,
+  .matrix-axis-button {
     width: 44px;
     height: 44px;
+  }
+
+  .matrix-row-button,
+  .coverage-matrix-title-button {
+    min-height: 44px;
   }
 
   .palette-selection-bar > button {

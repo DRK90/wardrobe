@@ -26,6 +26,7 @@ test("matrix selections union cells and retain their selected formality grain", 
     { id: "long", category: "top", sleeveLength: "long", formality: 3 },
     { id: "short", category: "top", sleeveLength: "short", formality: 3 },
     { id: "formal", category: "top", sleeveLength: "long", formality: 4 },
+    { id: "bottom", category: "bottom", bottomLength: "full", formality: 3 },
     { id: "shoes", category: "shoes", itemType: "loafers", formality: 3 }
   ];
   const clauses = [
@@ -35,6 +36,18 @@ test("matrix selections union cells and retain their selected formality grain", 
 
   assert.deepEqual(filterItemsByMatrixSelection(items, clauses).map((item) => item.id), ["long", "short"]);
   assert.deepEqual(formalitiesForSelection(clauses), [3]);
+  assert.deepEqual(
+    filterItemsByMatrixSelection(items, [{ slot: "top", field: "sleeveLength", value: "long", formality: 0 }]).map((item) => item.id),
+    ["long", "formal"]
+  );
+  assert.deepEqual(
+    filterItemsByMatrixSelection(items, [{ slot: "top", field: "sleeveLength", value: "all", formality: 3 }]).map((item) => item.id),
+    ["long", "short"]
+  );
+  assert.deepEqual(
+    filterItemsByMatrixSelection(items, [{ slot: "bottom", field: "bottomLength", value: "all", formality: 0 }]).map((item) => item.id),
+    ["bottom"]
+  );
 });
 
 test("target palette and recommendation honor exclusions and preference ratings", () => {
@@ -94,4 +107,26 @@ test("recommendation coverage follows swatch similarity instead of color names",
   assert.ok(colorSimilarity(nearNavy.swatch, "#293b59") > 0.99);
   assert.ok(recommendation.actualCount > 0.99);
   assert.equal(recommendation.similarItemCount, 1);
+});
+
+test("missing color families outrank a well-covered similar color family", () => {
+  const preferences = defaultColorPreferences();
+  const clauses = [{ slot: "top", field: "sleeveLength", value: "long", formality: 3 }];
+  const lightBlueTops = ["#8eb8d2", "#88b3cf", "#9ac1d8"].map((swatch, index) => ({
+    id: `light-blue-${index}`,
+    category: "top",
+    sleeveLength: "long",
+    formality: 3,
+    status: "active",
+    swatch
+  }));
+  const recommendation = recommendItemColor({
+    selectedItems: lightBlueTops,
+    allItems: lightBlueTops,
+    clauses,
+    preferences
+  });
+
+  assert.notEqual(recommendation.id, "light_blue");
+  assert.ok(recommendation.actualCount < 0.25);
 });
