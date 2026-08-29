@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyWearToItems,
   availableSelectionIds,
   calendarOutfitColorGroups,
   localDateIso,
   monthDates,
+  markPlannerPlanWorn,
+  plannerPlanIsPending,
   resolveSavedSelections,
   serializePlannerPlan,
   serializeTodayPlans,
   upsertOutfitDay,
+  wearTimestampForDate,
   wearOutfitsForDate
 } from "../src/outfitCalendar.js";
 
@@ -86,6 +90,47 @@ test("outfit day upserts preserve the other record type for the same date", () =
   assert.equal(withBoth.length, 1);
   assert.deepEqual(withBoth[0].plannerPlan, plannerPlan);
   assert.deepEqual(withBoth[0].todayPlans, [{ id: "today-1" }]);
+});
+
+test("a logged planner outfit remains stored but no longer counts as pending", () => {
+  const date = "2026-08-20";
+  const plannerPlan = serializePlannerPlan(
+    { eventDate: date },
+    {},
+    { selections: { top: [top] } },
+    "2026-08-18T12:00:00.000Z"
+  );
+  const days = upsertOutfitDay([], date, { plannerPlan });
+  const wornAt = wearTimestampForDate(date, "09:30");
+  const fulfilled = markPlannerPlanWorn(days, date, { outfitId: "worn-outfit-1", wornAt });
+
+  assert.equal(plannerPlanIsPending(days[0]), true);
+  assert.equal(plannerPlanIsPending(fulfilled[0]), false);
+  assert.equal(fulfilled[0].plannerPlan.wornOutfitId, "worn-outfit-1");
+  assert.equal(fulfilled[0].plannerPlan.selectedItemIds.top[0], top.id);
+});
+
+test("backfilled wear increments counts without moving last worn backward", () => {
+  const items = [
+    { ...top, wears: 4, lastWorn: "2026-08-22", laundry: "ready" },
+    { ...shoes, wears: 1, lastWorn: "", laundry: "ready" }
+  ];
+  const updated = applyWearToItems(items, [top.id, shoes.id], "2026-08-18", { markDirty: true });
+
+  assert.equal(updated[0].wears, 5);
+  assert.equal(updated[0].lastWorn, "2026-08-22");
+  assert.equal(updated[0].laundry, "dirty");
+  assert.equal(updated[1].wears, 2);
+  assert.equal(updated[1].lastWorn, "2026-08-18");
+});
+
+test("historical wear timestamps preserve the selected local date and time", () => {
+  const timestamp = wearTimestampForDate("2026-08-18", "07:45");
+  const local = new Date(timestamp);
+
+  assert.equal(localDateIso(local), "2026-08-18");
+  assert.equal(local.getHours(), 7);
+  assert.equal(local.getMinutes(), 45);
 });
 
 test("calendar month produces six complete Sunday-first weeks", () => {

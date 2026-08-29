@@ -76,6 +76,7 @@ export function serializePlannerPlan(request, locks, outfit, savedAt = new Date(
     request: { ...request },
     locks: cloneLocks(locks),
     selectedItemIds: selectionIdsFor(outfit?.selections),
+    lastWornDate: "",
     savedAt
   };
 }
@@ -84,6 +85,44 @@ export function upsertOutfitDay(days, date, patch) {
   const current = days.find((day) => day.id === date) ?? { id: date, date };
   const next = { ...current, ...patch, id: date, date };
   return [...days.filter((day) => day.id !== date), next].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export function plannerPlanIsPending(day) {
+  return Boolean(day?.plannerPlan && day.plannerPlan.lastWornDate !== day.date);
+}
+
+export function markPlannerPlanWorn(days, date, { outfitId, wornAt }) {
+  const day = days.find((candidate) => candidate.id === date);
+  if (!day?.plannerPlan) return days;
+  return upsertOutfitDay(days, date, {
+    plannerPlan: {
+      ...day.plannerPlan,
+      lastWornDate: date,
+      wornOutfitId: outfitId,
+      wornAt
+    },
+    updatedAt: new Date().toISOString()
+  });
+}
+
+export function wearTimestampForDate(date, time = "12:00") {
+  const normalizedTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(time)) ? time : "12:00";
+  const timestamp = new Date(`${date}T${normalizedTime}:00`);
+  return Number.isNaN(timestamp.getTime()) ? new Date().toISOString() : timestamp.toISOString();
+}
+
+export function applyWearToItems(items, itemIds, wornDate, { markDirty = false } = {}) {
+  const wornIds = new Set(itemIds);
+  return items.map((item) => {
+    if (!wornIds.has(item.id)) return item;
+    const lastWorn = !item.lastWorn || item.lastWorn < wornDate ? wornDate : item.lastWorn;
+    return {
+      ...item,
+      wears: Number(item.wears || 0) + 1,
+      lastWorn,
+      laundry: markDirty ? "dirty" : item.laundry === "worn" ? "ready" : item.laundry
+    };
+  });
 }
 
 export function monthDates(monthDate) {

@@ -14,6 +14,8 @@ sync, hosted backend, AI, or account integrations in the current public app.
 - Tracks clothing items with category, brand, size, color, material, condition,
   cost, weather traits, laundry state, and local photos.
 - Plans outfits from the items stored on the device.
+- Saves and edits plans by calendar date, and backfills worn outfits on earlier
+  dates without overwriting newer last-worn history.
 - Scores outfit pieces against weather, formality, style, color, layering, and
   recent wear history.
 - Organizes wardrobe coverage by formality, garment type, and length with
@@ -80,8 +82,9 @@ Wardrobe uses browser storage, not a server database:
 - `items`: wardrobe inventory records.
 - `settings`: local app, weather, taxonomy, target palette, and starter-item
   preferences.
-- `wearLogs`: local wear history.
-- `outfitDays`: saved Today outfits and future outfit plans by calendar date.
+- `wearLogs`: local wear history, including the date worn and the time the
+  record was entered.
+- `outfitDays`: saved Today outfits and editable outfit plans by calendar date.
 - `weatherCache`: cached ZIP forecast responses.
 
 Deleting browser data for the site deletes the local wardrobe copy. Use Settings

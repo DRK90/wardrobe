@@ -16,6 +16,7 @@ import {
   MapPin,
   Navigation,
   PackageSearch,
+  Pencil,
   Plus,
   RefreshCcw,
   Search,
@@ -31,7 +32,7 @@ import {
   Wind,
   X
 } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   climateOptions,
   laundryOptions,
@@ -91,15 +92,19 @@ import {
   saveWeatherCache
 } from "./storage.js";
 import {
+  applyWearToItems,
   availableSelectionIds,
   calendarOutfitColorGroups,
   localDateIso,
+  markPlannerPlanWorn,
   monthDates,
+  plannerPlanIsPending,
   resolveSavedSelections,
   selectionIdsFor,
   serializePlannerPlan,
   serializeTodayPlans,
   upsertOutfitDay,
+  wearTimestampForDate,
   wearOutfitsForDate
 } from "./outfitCalendar.js";
 import {
@@ -581,18 +586,6 @@ function brandLabel(value) {
   return value || "Unbranded";
 }
 
-function brandTotals(items) {
-  return items.reduce((map, item) => {
-    const label = String(item.brand || "Unbranded").trim() || "Unbranded";
-    const key = label.toLocaleLowerCase();
-    const current = map.get(key) ?? { label, count: 0, value: 0 };
-    current.count += 1;
-    current.value += Number(item.cost || 0);
-    map.set(key, current);
-    return map;
-  }, new Map());
-}
-
 function hslFromRgb(red, green, blue) {
   const max = Math.max(red, green, blue);
   const min = Math.min(red, green, blue);
@@ -693,9 +686,6 @@ function analyticsFor(items, wearLogs, settings) {
   const bySeason = [...groupTotals(active, "season").values()].sort((a, b) => b.count - a.count);
   const byClimate = [...groupTotals(active, "climate").values()].sort((a, b) => b.count - a.count);
   const byMaterial = [...groupTotals(active, "material").values()].sort((a, b) => b.count - a.count).slice(0, 6);
-  const byBrand = [...brandTotals(active).values()].sort(
-    (a, b) => b.count - a.count || String(a.label).localeCompare(String(b.label))
-  );
   const byLaundry = [...groupTotals(active, "laundry").values()].sort((a, b) => b.count - a.count);
   const byFormality = [...groupTotals(active, "formality", "cost").values()].sort((a, b) => Number(a.label) - Number(b.label));
   const taxonomy = normalizeTaxonomyConfig(settings?.taxonomy);
@@ -727,7 +717,6 @@ function analyticsFor(items, wearLogs, settings) {
     bySeason,
     byClimate,
     byMaterial,
-    byBrand,
     byLaundry,
     byFormality,
     coverage,
@@ -775,12 +764,35 @@ function StatusChip({ tone = "neutral", icon: Icon, children }) {
   );
 }
 
-function ItemVisual({ item, size = "md" }) {
-  return (
-    <div className={`item-visual visual-${size}`} style={{ "--swatch": item?.swatch ?? "oklch(0.43 0.075 200)" }}>
-      {item?.imageDataUrl ? <img src={item.imageDataUrl} alt="" /> : <Shirt size={size === "lg" ? 28 : 16} aria-hidden="true" />}
-    </div>
-  );
+const ItemInspectorContext = createContext(null);
+
+function ItemVisual({ item, size = "md", interactive = true }) {
+  const inspector = useContext(ItemInspectorContext);
+  const canInspect = Boolean(interactive && item?.id && inspector?.canInspect(item.id));
+  const content = item?.imageDataUrl
+    ? <img src={item.imageDataUrl} alt="" />
+    : <Shirt size={size === "lg" ? 28 : 16} aria-hidden="true" />;
+  const className = `item-visual visual-${size}`;
+  const style = { "--swatch": item?.swatch ?? "oklch(0.43 0.075 200)" };
+
+  if (canInspect) {
+    return (
+      <button
+        className={className}
+        style={style}
+        type="button"
+        aria-label={`Open ${item.name || "item"}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          inspector.openItem(item.id);
+        }}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className={className} style={style}>{content}</div>;
 }
 
 function ToggleGroup({ options, values, onChange }) {
@@ -818,6 +830,7 @@ function App() {
   const [generatedOutfit, setGeneratedOutfit] = useState(null);
   const [outfitLocks, setOutfitLocks] = useState({});
   const [form, setForm] = useState(() => freshItemTemplate());
+  const [inspectedItemId, setInspectedItemId] = useState("");
   const [toast, setToast] = useState("");
   const [installPrompt, setInstallPrompt] = useState(null);
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
@@ -825,6 +838,17 @@ function App() {
     window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone === true
   );
   const importRef = useRef(null);
+  const inspectedItem = items.find((item) => item.id === inspectedItemId);
+  const itemInspector = useMemo(
+    () => ({
+      selectedItemId: inspectedItemId,
+      openItem: (itemId) => {
+        if (items.some((item) => item.id === itemId)) setInspectedItemId(itemId);
+      },
+      canInspect: (itemId) => items.some((item) => item.id === itemId)
+    }),
+    [inspectedItemId, items]
+  );
 
   useEffect(() => {
     async function hydrate() {
@@ -1281,6 +1305,7 @@ function App() {
       }));
     }
     const nextItems = items.filter((candidate) => candidate.id !== id);
+    if (inspectedItemId === id) setInspectedItemId("");
     setItems(nextItems);
     setGeneratedOutfit((current) => syncOutfitItems(current, nextItems));
     setOutfitLocks((current) =>
@@ -1492,40 +1517,31 @@ function App() {
     );
   }
 
-  function markTodayOutfitWorn(planId, options = {}) {
-    const plan = todayOutfits.find((candidate) => candidate.id === planId);
-    const entries = outfitEntries(plan?.outfit?.selections);
+  function logOutfitWear({ outfit, outfitRequest, label, wornDate, source, outfitId, markDirty = false }) {
+    const entries = outfitEntries(outfit?.selections);
     const uniqueEntries = entries.filter(([, item], index, list) => list.findIndex(([, candidate]) => candidate.id === item.id) === index);
     const wornIds = new Set(uniqueEntries.map(([, item]) => item.id));
-    if (!plan || !wornIds.size) {
+    if (!wornIds.size) {
       showToast("Add outfit items first");
-      return;
+      return null;
     }
 
-    const wornDate = todayIso();
-    const wornAt = new Date().toISOString();
-    const markDirty = Boolean(options.markDirty);
-    const nextItems = items.map((item) =>
-      wornIds.has(item.id)
-        ? {
-            ...item,
-            wears: Number(item.wears || 0) + 1,
-            lastWorn: wornDate,
-            laundry: markDirty ? "dirty" : item.laundry === "worn" ? "ready" : item.laundry
-          }
-        : item
-    );
+    const resolvedOutfitId = outfitId || makeId("outfit");
+    const wornAt = wearTimestampForDate(wornDate, outfitRequest?.eventTime);
+    const loggedAt = new Date().toISOString();
+    const nextItems = applyWearToItems(items, wornIds, wornDate, { markDirty });
     const logs = uniqueEntries.map(([slot, item]) => ({
       id: makeId("wear"),
       itemId: item.id,
       slot,
       wornAt,
       wornDate,
-      source: "today",
+      loggedAt,
+      source,
       markedDirty: markDirty,
-      outfitId: plan.id,
-      outfitLabel: plan.label,
-      outfitRequest: { ...plan.request },
+      outfitId: resolvedOutfitId,
+      outfitLabel: label,
+      outfitRequest: { ...outfitRequest, eventDate: wornDate },
       itemSnapshot: {
         name: item.name,
         color: item.color,
@@ -1540,14 +1556,58 @@ function App() {
     setTodayOutfits((current) =>
       current.map((candidate) => ({
         ...candidate,
-        outfit: syncOutfitItems(candidate.outfit, nextItems),
-        lastWornDate: candidate.id === planId ? wornDate : candidate.lastWornDate
+        outfit: syncOutfitItems(candidate.outfit, nextItems)
       }))
     );
     showToast(
       `${uniqueEntries.length} item${uniqueEntries.length === 1 ? "" : "s"} ${
         markDirty ? "logged and marked dirty" : "wear logged"
       }`
+    );
+    return { outfitId: resolvedOutfitId, wornAt };
+  }
+
+  function markTodayOutfitWorn(planId, options = {}) {
+    const plan = todayOutfits.find((candidate) => candidate.id === planId);
+    if (!plan) return;
+    const wornDate = todayIso();
+    const result = logOutfitWear({
+      outfit: plan.outfit,
+      outfitRequest: plan.request,
+      label: plan.label,
+      wornDate,
+      source: "today",
+      outfitId: plan.id,
+      markDirty: Boolean(options.markDirty)
+    });
+    if (!result) return;
+    setTodayOutfits((current) =>
+      current.map((candidate) =>
+        candidate.id === planId ? { ...candidate, lastWornDate: wornDate } : candidate
+      )
+    );
+  }
+
+  function markPlannerOutfitWorn(options = {}) {
+    const wornDate = request.eventDate;
+    if (!parseDate(wornDate) || wornDate > todayIso()) {
+      showToast("Choose today or an earlier date");
+      return;
+    }
+    const result = logOutfitWear({
+      outfit: generatedOutfit,
+      outfitRequest: request,
+      label: `${labelFor(request.outfitCategory)} outfit`,
+      wornDate,
+      source: "calendar",
+      markDirty: Boolean(options.markDirty)
+    });
+    if (!result) return;
+    setOutfitDays((current) =>
+      markPlannerPlanWorn(current, wornDate, {
+        outfitId: result.outfitId,
+        wornAt: result.wornAt
+      })
     );
   }
 
@@ -1748,17 +1808,18 @@ function App() {
   }
 
   return (
-    <div className="app-shell" {...componentMeta("AppShell")}>
-      <Sidebar
-        view={view}
-        setView={setView}
-        activeWeather={activeWeather}
-        isInstalled={isInstalled}
-        onInstall={installApp}
-      />
-      <div className="workspace">
-        <main className="content-grid single">
-          <section className="primary-pane" aria-label="Wardrobe workspace">
+    <ItemInspectorContext.Provider value={itemInspector}>
+      <div className="app-shell" {...componentMeta("AppShell")}>
+        <Sidebar
+          view={view}
+          setView={setView}
+          activeWeather={activeWeather}
+          isInstalled={isInstalled}
+          onInstall={installApp}
+        />
+        <div className="workspace">
+          <main className="content-grid single">
+            <section className="primary-pane" aria-label="Wardrobe workspace">
             {view === "dashboard" ? (
               <TodayView
                 settings={settings}
@@ -1787,6 +1848,7 @@ function App() {
                 items={items}
                 todayOutfits={todayOutfits}
                 onOpenPlanner={openPlannerForDate}
+                onAddWornOutfit={openPlannerForDate}
                 onOpenToday={() => setView("dashboard")}
               />
             ) : null}
@@ -1810,7 +1872,6 @@ function App() {
                 sort={sort}
                 setSort={setSort}
                 onRemove={removeItem}
-                onSaveItem={saveInventoryItem}
                 taxonomy={settings.taxonomy}
               />
             ) : null}
@@ -1835,6 +1896,7 @@ function App() {
                 eventForecastStatus={eventForecastStatus}
                 onFindEventForecast={() => applyEventForecast(request, "planner")}
                 onSavePlan={savePlannerPlan}
+                onLogWorn={markPlannerOutfitWorn}
               />
             ) : null}
             {view === "capture" ? (
@@ -1863,19 +1925,27 @@ function App() {
                 starterItemCount={items.filter((item) => starterItemIds.has(item.id)).length}
               />
             ) : null}
-          </section>
-
-        </main>
+            </section>
+          </main>
+        </div>
+        {installHelpOpen ? (
+          <InstallHelpDialog
+            canPrompt={Boolean(installPrompt)}
+            onPrompt={runInstallPrompt}
+            onClose={() => setInstallHelpOpen(false)}
+          />
+        ) : null}
+        {inspectedItem ? (
+          <ItemDetailModal
+            item={inspectedItem}
+            onSave={saveInventoryItem}
+            onClose={() => setInspectedItemId("")}
+            taxonomy={settings.taxonomy}
+          />
+        ) : null}
+        {toast ? <div className="toast">{toast}</div> : null}
       </div>
-      {installHelpOpen ? (
-        <InstallHelpDialog
-          canPrompt={Boolean(installPrompt)}
-          onPrompt={runInstallPrompt}
-          onClose={() => setInstallHelpOpen(false)}
-        />
-      ) : null}
-      {toast ? <div className="toast">{toast}</div> : null}
-    </div>
+    </ItemInspectorContext.Provider>
   );
 }
 
@@ -2146,21 +2216,6 @@ function TodayOutfitCard({
         lockedItems={plan.locks ?? {}}
         surface="today"
       />
-      <WeatherFitList entries={selectedItems} request={plan.request} />
-      <div className="evidence-list">
-        {(plan.outfit?.reasons ?? []).map((line) => (
-          <div key={line}>
-            <Check size={14} aria-hidden="true" />
-            <span>{line}</span>
-          </div>
-        ))}
-        {(plan.outfit?.missing ?? []).map((slot) => (
-          <div key={slot} className="warning-line">
-            <PackageSearch size={14} aria-hidden="true" />
-            <span>Add a ready {slot}</span>
-          </div>
-        ))}
-      </div>
     </section>
   );
 }
@@ -2232,7 +2287,7 @@ function CalendarOutfitSummary({ label, entries, request, status, timestamp }) {
   );
 }
 
-function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner, onOpenToday }) {
+function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner, onAddWornOutfit, onOpenToday }) {
   const [selectedDate, setSelectedDate] = useState(todayIso());
   const [visibleMonth, setVisibleMonth] = useState(() => {
     const today = parseDate(todayIso());
@@ -2244,7 +2299,7 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
   const wornDates = new Set(wearLogs.map((log) => log.wornDate).filter(Boolean));
   const plannedDates = new Set(
     outfitDays
-      .filter((day) => day.plannerPlan || day.todayPlans?.some((plan) => plan.lastWornDate !== day.date))
+      .filter((day) => plannerPlanIsPending(day) || day.todayPlans?.some((plan) => plan.lastWornDate !== day.date))
       .map((day) => day.date)
   );
   const selectedRecord = daysByDate.get(selectedDate);
@@ -2261,7 +2316,7 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
         }));
   const unwornDayPlans = savedTodayPlans.filter((plan) => plan.lastWornDate !== selectedDate && plan.entries.length);
   const plannerPlan = selectedRecord?.plannerPlan;
-  const plannerEntries = plannerPlan ? outfitEntries(resolveSavedSelections(plannerPlan, items)) : [];
+  const plannerEntries = plannerPlanIsPending(selectedRecord) ? outfitEntries(resolveSavedSelections(plannerPlan, items)) : [];
   const isToday = selectedDate === today;
   const isFuture = selectedDate > today;
 
@@ -2281,7 +2336,7 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
     const unwornEntryGroups = dayPlans
       .filter((plan) => plan.lastWornDate !== date && plan.entries.length)
       .map((plan) => plan.entries);
-    const savedPlannerEntries = dayRecord?.plannerPlan
+    const savedPlannerEntries = plannerPlanIsPending(dayRecord)
       ? outfitEntries(resolveSavedSelections(dayRecord.plannerPlan, items))
       : [];
 
@@ -2371,17 +2426,25 @@ function CalendarView({ wearLogs, outfitDays, items, todayOutfits, onOpenPlanner
               {wornOutfits.length ? `${wornOutfits.length} worn outfit${wornOutfits.length === 1 ? "" : "s"}` : isFuture ? "Future plan" : "No wear logged"}
             </span>
           </div>
-          {isToday ? (
-            <button className="secondary-button" type="button" onClick={onOpenToday}>
-              <CloudSun size={16} aria-hidden="true" />
-              Open Today
-            </button>
-          ) : isFuture ? (
-            <button className="primary-button" type="button" onClick={() => onOpenPlanner(selectedDate)}>
-              <Wand2 size={16} aria-hidden="true" />
-              {plannerPlan ? "Open in Planner" : "Plan this day"}
-            </button>
-          ) : null}
+          <div className="panel-actions calendar-detail-actions">
+            {isToday ? (
+              <button className="secondary-button" type="button" onClick={onOpenToday}>
+                <CloudSun size={16} aria-hidden="true" />
+                Open Today
+              </button>
+            ) : (
+              <button className="secondary-button" type="button" onClick={() => onOpenPlanner(selectedDate)}>
+                {plannerPlan ? <Pencil size={16} aria-hidden="true" /> : <Wand2 size={16} aria-hidden="true" />}
+                {plannerPlan ? "Edit plan" : isFuture ? "Plan this day" : "Add plan"}
+              </button>
+            )}
+            {!isToday && !isFuture ? (
+              <button className="primary-button" type="button" onClick={() => onAddWornOutfit(selectedDate)}>
+                <Check size={16} aria-hidden="true" />
+                Add worn outfit
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <div className="calendar-detail-body">
@@ -2459,6 +2522,7 @@ function InsightsView({ analytics, settings, setFilters, setQuery, setView }) {
       />
       <ColorPalettePanel
         colors={paletteColors}
+        items={paletteItems}
         itemCount={paletteItems.length}
         selection={paletteSelection}
         targetPalette={targetPalette}
@@ -2482,9 +2546,6 @@ function InsightsView({ analytics, settings, setFilters, setQuery, setView }) {
         </Panel>
         <Panel title="Material mix">
           <BarList rows={analytics.byMaterial} valueKey="count" />
-        </Panel>
-        <Panel title="Brand coverage">
-          <BrandCoverageList rows={analytics.byBrand} />
         </Panel>
         <Panel title="Laundry status">
           <BarList rows={analytics.byLaundry.map((row) => ({ ...row, label: labelFor(row.label) }))} valueKey="count" />
@@ -2929,24 +2990,9 @@ function CoverageMatrix({ coverage, selection, onToggleClause }) {
   );
 }
 
-function BrandCoverageList({ rows }) {
-  if (!rows.length) return <p className="muted compact-text">No brands recorded.</p>;
-
-  return (
-    <div className="brand-coverage-list">
-      {rows.map((row) => (
-        <div key={row.label}>
-          <strong>{brandLabel(row.label)}</strong>
-          <span>{row.count} items</span>
-          <span>{money(row.value)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function ColorPalettePanel({
   colors,
+  items,
   itemCount,
   selection,
   targetPalette,
@@ -3035,24 +3081,46 @@ function ColorPalettePanel({
             </div>
           )}
         </div>
-        <div className="palette-grid compact actual-palette-legend">
-          {legendEntries.map((entry) => (
-            <button
-              key={`${entry.swatch}-${entry.color}`}
-              className="palette-swatch"
-              style={{ "--swatch": entry.swatch }}
-              onClick={() => {
-                setFilters(filterDefaults);
-                setQuery(entry.color || "");
-                setView("inventory");
-              }}
-              type="button"
-            >
-              <span />
-              <strong>{entry.color || "Color"}</strong>
-            </button>
-          ))}
-          {!legendEntries.length ? <p className="muted compact-text">No colors in this selection.</p> : null}
+        <div className="palette-detail-column">
+          {selection.length ? (
+            <section className="palette-selected-items" aria-label="Selected items">
+              <div className="palette-selected-items-heading">
+                <strong>Selected items</strong>
+                <span>{items.length}</span>
+              </div>
+              <div className="palette-selected-item-list">
+                {items.map((item) => (
+                  <div className="palette-selected-item" key={item.id}>
+                    <ItemVisual item={item} size="sm" />
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>{item.brand || "Unbranded"} · {item.color || "Color n/a"}</small>
+                    </span>
+                  </div>
+                ))}
+                {!items.length ? <p className="muted compact-text">No items in this selection.</p> : null}
+              </div>
+            </section>
+          ) : null}
+          <div className="palette-grid compact actual-palette-legend">
+            {legendEntries.map((entry) => (
+              <button
+                key={`${entry.swatch}-${entry.color}`}
+                className="palette-swatch"
+                style={{ "--swatch": entry.swatch }}
+                onClick={() => {
+                  setFilters(filterDefaults);
+                  setQuery(entry.color || "");
+                  setView("inventory");
+                }}
+                type="button"
+              >
+                <span />
+                <strong>{entry.color || "Color"}</strong>
+              </button>
+            ))}
+            {!legendEntries.length ? <p className="muted compact-text">No colors in this selection.</p> : null}
+          </div>
         </div>
       </div>
     </div>
@@ -3294,7 +3362,7 @@ function ItemDetailModal({ item, onSave, onClose, taxonomy }) {
         <form className="item-modal-form" onSubmit={handleSubmit}>
           <div className="item-modal-header">
             <div className="item-modal-title">
-              <ItemVisual item={draft} size="md" />
+              <ItemVisual item={draft} size="md" interactive={false} />
               <div>
                 <h1 id={titleId}>{draft.name || "Edit item"}</h1>
                 <span>{draft.brand || "Unbranded"} · {draft.color || "Color n/a"} · {costPerWear(draft)}</span>
@@ -3520,11 +3588,10 @@ function InventoryView({
   sort,
   setSort,
   onRemove,
-  onSaveItem,
   taxonomy
 }) {
-  const [selectedItemId, setSelectedItemId] = useState("");
-  const selectedItem = allItems.find((candidate) => candidate.id === selectedItemId);
+  const inspector = useContext(ItemInspectorContext);
+  const selectedItemId = inspector?.selectedItemId ?? "";
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value }));
@@ -3665,11 +3732,11 @@ function InventoryView({
                   className={selected ? "inventory-row selected" : "inventory-row"}
                   key={item.id}
                   tabIndex="0"
-                  onClick={() => setSelectedItemId((current) => (current === item.id ? "" : item.id))}
+                  onClick={() => inspector?.openItem(item.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
-                      setSelectedItemId((current) => (current === item.id ? "" : item.id));
+                      inspector?.openItem(item.id);
                     }
                   }}
                 >
@@ -3729,14 +3796,6 @@ function InventoryView({
           </tbody>
         </table>
       </div>
-      {selectedItem ? (
-        <ItemDetailModal
-          item={selectedItem}
-          onSave={onSaveItem}
-          onClose={() => setSelectedItemId("")}
-          taxonomy={taxonomy}
-        />
-      ) : null}
     </section>
   );
 }
@@ -3925,12 +3984,20 @@ function PlannerView({
   surface = "planner",
   eventForecastStatus,
   onFindEventForecast,
-  onSavePlan
+  onSavePlan,
+  onLogWorn
 }) {
   const selectedItems = outfitEntries(outfit?.selections);
   const updateRequest = onUpdateRequest ?? setRequest;
   const updateAndGenerate = (patch) => updateRequest({ ...request, ...patch }, { generate: true, surface });
   const showPlanningFields = surface !== "today";
+  const canLogWorn = showPlanningFields && Boolean(parseDate(request.eventDate)) && request.eventDate <= todayIso();
+  const isPastDate = showPlanningFields && request.eventDate < todayIso();
+  const [markDirty, setMarkDirty] = useState(false);
+
+  useEffect(() => {
+    setMarkDirty(false);
+  }, [request.eventDate]);
 
   async function savePlanLocation(event) {
     event.preventDefault();
@@ -3960,14 +4027,41 @@ function PlannerView({
               <Shuffle size={16} aria-hidden="true" />
               Regenerate outfit
             </button>
-            <button className="secondary-button" onClick={onFindEventForecast} type="button" disabled={eventForecastStatus?.state === "loading"}>
-              <CloudSun size={16} aria-hidden="true" />
-              {eventForecastStatus?.state === "loading" ? "Checking" : "Get forecast"}
-            </button>
-            <button className="primary-button" onClick={onSavePlan} type="button">
+            {!isPastDate ? (
+              <button className="secondary-button" onClick={onFindEventForecast} type="button" disabled={eventForecastStatus?.state === "loading"}>
+                <CloudSun size={16} aria-hidden="true" />
+                {eventForecastStatus?.state === "loading" ? "Checking" : "Get forecast"}
+              </button>
+            ) : null}
+            <button className={canLogWorn ? "secondary-button" : "primary-button"} onClick={onSavePlan} type="button">
               <CalendarDays size={16} aria-hidden="true" />
               Save plan
             </button>
+            {canLogWorn ? (
+              <div className="wear-action-group planner-wear-action">
+                <label className="checkbox-line compact-checkbox dirty-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={markDirty}
+                    disabled={!selectedItems.length}
+                    onChange={(event) => setMarkDirty(event.target.checked)}
+                  />
+                  Mark dirty
+                </label>
+                <button
+                  className="primary-button"
+                  onClick={() => {
+                    onLogWorn({ markDirty });
+                    setMarkDirty(false);
+                  }}
+                  type="button"
+                  disabled={!selectedItems.length}
+                >
+                  <Check size={16} aria-hidden="true" />
+                  Log worn
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
         <PlannerWeatherLocations
@@ -3985,7 +4079,6 @@ function PlannerView({
                 Date planned
                 <input
                   type="date"
-                  min={todayIso()}
                   value={request.eventDate}
                   onChange={(event) => updateRequest({ ...request, eventDate: event.target.value }, { surface })}
                 />
@@ -4474,11 +4567,13 @@ function SlotPicker({ slot, title, query, setQuery, allItems, candidates, exclud
       </div>
       <div className="slot-picker-results">
         {rows.map((item) => (
-          <button key={item.id} type="button" onClick={() => onChooseItem(item.id)}>
+          <div className="slot-picker-result" key={item.id}>
             <ItemVisual item={item} size="sm" />
-            <span>{item.name}</span>
-            <small>{item.color || item.material || labelFor(item.category)}</small>
-          </button>
+            <button className="slot-picker-select" type="button" onClick={() => onChooseItem(item.id)}>
+              <span>{item.name}</span>
+              <small>{item.color || item.material || labelFor(item.category)}</small>
+            </button>
+          </div>
         ))}
         {!rows.length ? <p className="muted compact-text">No matching items.</p> : null}
       </div>

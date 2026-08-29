@@ -659,6 +659,10 @@ textarea {
   padding: 0 var(--space-4);
 }
 
+.calendar-detail-actions {
+  justify-content: flex-end;
+}
+
 .calendar-outfit-summary {
   padding: var(--space-4) 0;
   display: grid;
@@ -1340,6 +1344,84 @@ textarea {
   align-content: start;
 }
 
+.palette-detail-column {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.palette-selected-items {
+  min-width: 0;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.palette-selected-items-heading {
+  min-height: 42px;
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-panel);
+  padding: 0 var(--space-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.palette-selected-items-heading strong {
+  font-size: 0.82rem;
+}
+
+.palette-selected-items-heading span {
+  color: var(--color-muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.palette-selected-item-list {
+  max-height: 260px;
+  overflow: auto;
+  padding: var(--space-2);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-2);
+}
+
+.palette-selected-item {
+  min-width: 0;
+  min-height: 50px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.palette-selected-item > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.palette-selected-item strong,
+.palette-selected-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-selected-item strong {
+  font-size: 0.78rem;
+}
+
+.palette-selected-item small {
+  color: var(--color-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
 .palette-grid.compact {
   padding: 0;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -1380,32 +1462,6 @@ textarea {
 .palette-swatch small {
   color: var(--color-muted);
   font-weight: 800;
-}
-
-.brand-coverage-list {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.brand-coverage-list div {
-  min-height: 38px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: var(--space-2);
-  align-items: center;
-}
-
-.brand-coverage-list strong,
-.brand-coverage-list span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.78rem;
-}
-
-.brand-coverage-list span {
-  color: var(--color-muted);
-  font-weight: 750;
 }
 
 .action-list div {
@@ -1610,6 +1666,17 @@ textarea {
   font-size: 0.68rem;
   font-weight: 850;
   text-transform: uppercase;
+}
+
+button.item-visual {
+  padding: 0;
+  cursor: pointer;
+}
+
+button.item-visual:hover,
+button.item-visual:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-primary), transparent 76%);
 }
 
 .item-visual img {
@@ -2154,6 +2221,10 @@ textarea {
   flex-wrap: nowrap;
 }
 
+.planner-wear-action {
+  min-height: 36px;
+}
+
 .preference-checkbox {
   min-height: 34px;
   align-self: end;
@@ -2495,8 +2566,8 @@ textarea {
   border-color: var(--color-primary);
 }
 
-.slot-picker-results button {
-  min-height: 40px;
+.slot-picker-result {
+  min-height: 44px;
   border: 1px solid var(--color-line);
   border-radius: var(--radius);
   background: var(--color-bg);
@@ -2508,11 +2579,25 @@ textarea {
   text-align: left;
 }
 
-.slot-picker-results button:hover {
+.slot-picker-result:hover {
   border-color: var(--color-primary);
 }
 
-.slot-picker-results button span {
+.slot-picker-select {
+  min-width: 0;
+  min-height: 34px;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: left;
+}
+
+.slot-picker-select span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2562,10 +2647,6 @@ textarea {
   overflow: auto;
   display: grid;
   gap: var(--space-2);
-}
-
-.slot-picker-results button {
-  grid-template-columns: 34px minmax(0, 1fr) auto;
 }
 
 .slot-picker-results small {
@@ -2981,7 +3062,8 @@ meter {
   }
 
   .today-outfit-card .panel-actions,
-  .planner-control-panel .panel-actions {
+  .planner-control-panel .panel-actions,
+  .calendar-detail .panel-actions {
     width: 100%;
     justify-content: flex-start;
   }
